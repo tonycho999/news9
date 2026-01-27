@@ -1,4 +1,4 @@
-streamlit
+flask
 duckduckgo-search
 newspaper3k
 fpdf
