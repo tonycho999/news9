@@ -3,14 +3,14 @@ from duckduckgo_search import DDGS
 from newspaper import Article, Config
 import nltk
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
+import os
+import requests
 
 # Try to import googlesearch as fallback
 try:
     from googlesearch import search as google_search
 except ImportError:
     google_search = None
-
-import os
 
 class NewsScraper:
     def __init__(self):
@@ -33,7 +33,6 @@ class NewsScraper:
                 nltk.download('punkt_tab', download_dir=nltk_data_path)
             except Exception as e:
                 print(f"Failed to download NLTK data: {e}")
-                # Fallback: Depending on usage, NLP features might degrade but app shouldn't crash
                 pass
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(5), retry=retry_if_exception_type(Exception))
@@ -55,24 +54,18 @@ class NewsScraper:
             return []
 
         try:
-            # simple search, returns URLs
+            # First try advanced mode to get metadata
             urls = google_search(query, num_results=num_results, advanced=True)
             for r in urls:
-                # Check if r is an object or string
                 if hasattr(r, 'url'):
                     results.append({
                         'href': r.url,
                         'title': r.title,
                         'body': r.description
                     })
-                else:
-                     results.append({
-                        'href': r,
-                        'title': None, # Title will be extracted by newspaper
-                        'body': ''
-                    })
         except TypeError:
-             # advanced=True might not be supported
+             # If advanced=True fails, fall back to simple search (URL strings only)
+             print("Google advanced search failed, trying simple mode...")
              try:
                 urls = google_search(query, num_results=num_results)
                 for url in urls:
@@ -83,9 +76,51 @@ class NewsScraper:
                     })
              except Exception as e:
                  print(f"Google simple search error: {e}")
-
         except Exception as e:
             print(f"Google search error: {e}")
+            # Try simple mode if advanced raised another exception
+            if not results:
+                 try:
+                    urls = google_search(query, num_results=num_results)
+                    for url in urls:
+                        results.append({'href': url, 'title': None, 'body': ''})
+                 except:
+                    pass
+
+        return results
+
+    def _search_feed(self, keyword):
+        """
+        Fallback to searching RSS feeds if search engines fail.
+        This is a simple implementation that checks top Filipino news RSS.
+        """
+        print("Falling back to RSS Feeds...")
+        import feedparser
+
+        feeds = [
+            "https://www.inquirer.net/fullfeed",
+            "https://www.philstar.com/rss",
+            "https://www.rappler.com/feed"
+        ]
+
+        results = []
+        keyword_lower = keyword.lower()
+
+        for feed_url in feeds:
+            try:
+                feed = feedparser.parse(feed_url)
+                for entry in feed.entries:
+                    # Basic keyword matching in title or summary
+                    if keyword_lower in entry.title.lower() or keyword_lower in entry.get('summary', '').lower():
+                        results.append({
+                            'href': entry.link,
+                            'title': entry.title,
+                            'body': entry.get('summary', '')
+                        })
+                        if len(results) >= 5:
+                            return results
+            except Exception as e:
+                print(f"RSS parse error for {feed_url}: {e}")
 
         return results
 
@@ -98,7 +133,7 @@ class NewsScraper:
 
         print(f"Searching for: {query}")
 
-        # Try DuckDuckGo first
+        # 1. Try DuckDuckGo
         try:
             results = self._search_ddg(query, num_results)
             if results:
@@ -106,9 +141,21 @@ class NewsScraper:
         except Exception as e:
             print(f"DuckDuckGo error: {e}")
 
-        # Fallback to Google
-        if google_search:
-            return self._search_google(query, num_results)
+        # 2. Fallback to Google
+        try:
+            results = self._search_google(query, num_results)
+            if results:
+                return results
+        except Exception as e:
+            print(f"Google fallback error: {e}")
+
+        # 3. Fallback to RSS Feeds
+        try:
+            results = self._search_feed(keyword)
+            if results:
+                 return results
+        except Exception as e:
+            print(f"RSS fallback error: {e}")
 
         return []
 

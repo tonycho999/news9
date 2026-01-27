@@ -132,11 +132,18 @@
                 if (data.error) throw new Error(data.error);
 
                 currentArticles = data.results;
+
+                if (currentArticles.length === 0) {
+                     alert("No articles found using Search Engines or RSS Feeds. Please try a different keyword or check back later.");
+                }
+
                 renderArticles();
                 document.getElementById('resultsArea').classList.remove('hidden');
 
                 if (currentArticles.length > 0) {
                     document.getElementById('bottomBar').classList.remove('hidden');
+                } else {
+                    document.getElementById('bottomBar').classList.add('hidden');
                 }
 
             } catch (error) {
