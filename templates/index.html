@@ -39,10 +39,6 @@
                 <div class="input-group mb-3">
                     <input type="text" id="keyword" class="form-control form-control-lg" placeholder="Enter keyword (e.g. Traffic)">
                 </div>
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                     <label class="form-label mb-0">Article Count: <span id="countValue">5</span></label>
-                     <input type="range" class="form-range w-50" min="1" max="10" step="1" id="numResults" value="5" oninput="document.getElementById('countValue').innerText = this.value">
-                </div>
                 <button class="btn btn-primary btn-lg w-100" onclick="searchNews()">Search News</button>
             </div>
         </div>
@@ -114,7 +110,8 @@
             const keyword = document.getElementById('keyword').value;
             if (!keyword) return alert("Please enter a keyword");
 
-            const numResults = document.getElementById('numResults').value;
+            // Default to a high number as requested
+            const numResults = 20;
 
             showLoader(true, "Searching & Scraping... This may take a minute.");
             document.getElementById('resultsArea').classList.add('hidden');

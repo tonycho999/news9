@@ -5,6 +5,7 @@ import nltk
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 import os
 import requests
+import feedparser
 
 # Try to import googlesearch as fallback
 try:
@@ -15,7 +16,6 @@ except ImportError:
 class NewsScraper:
     def __init__(self):
         # Configure NLTK data path for serverless environments (read-only FS)
-        # Use /tmp/nltk_data if writable, otherwise rely on pre-installed paths
         nltk_data_path = os.path.join(os.path.abspath(os.sep), "tmp", "nltk_data")
         if nltk_data_path not in nltk.data.path:
             nltk.data.path.append(nltk_data_path)
@@ -26,7 +26,6 @@ class NewsScraper:
             nltk.data.find('tokenizers/punkt_tab')
         except LookupError:
             try:
-                # Try downloading to /tmp/nltk_data
                 if not os.path.exists(nltk_data_path):
                     os.makedirs(nltk_data_path, exist_ok=True)
                 nltk.download('punkt', download_dir=nltk_data_path)
@@ -89,18 +88,19 @@ class NewsScraper:
 
         return results
 
-    def _search_feed(self, keyword):
+    def _search_feed(self, keyword, num_results=20):
         """
-        Fallback to searching RSS feeds if search engines fail.
-        This is a simple implementation that checks top Filipino news RSS.
+        Fallback to searching RSS feeds.
+        Now includes more feeds and behaves more aggressively to find results.
         """
         print("Falling back to RSS Feeds...")
-        import feedparser
 
         feeds = [
             "https://www.inquirer.net/fullfeed",
             "https://www.philstar.com/rss",
-            "https://www.rappler.com/feed"
+            "https://www.rappler.com/feed",
+            "https://data.gmanews.tv/gno/rss/news/nation.xml",
+            "https://www.manilatimes.net/feed/"
         ]
 
         results = []
@@ -110,19 +110,43 @@ class NewsScraper:
             try:
                 feed = feedparser.parse(feed_url)
                 for entry in feed.entries:
-                    # Basic keyword matching in title or summary
-                    if keyword_lower in entry.title.lower() or keyword_lower in entry.get('summary', '').lower():
+                    title = entry.get('title', '')
+                    summary = entry.get('summary', '')
+                    link = entry.get('link', '')
+
+                    # Fuzzy match: check if keyword is in title or summary
+                    if keyword_lower in title.lower() or keyword_lower in summary.lower():
                         results.append({
-                            'href': entry.link,
-                            'title': entry.title,
-                            'body': entry.get('summary', '')
+                            'href': link,
+                            'title': title,
+                            'body': summary
                         })
-                        if len(results) >= 5:
-                            return results
+
+                    if len(results) >= num_results:
+                        return results
             except Exception as e:
                 print(f"RSS parse error for {feed_url}: {e}")
 
-        return results
+        # If no strict matches found, but we have a generic keyword like "news",
+        # or if results are empty, return the top headlines from the first working feed
+        # This ensures we always return *something* rather than nothing.
+        if not results:
+            print("No keyword matches in RSS. Fetching top headlines as fallback.")
+            for feed_url in feeds:
+                try:
+                    feed = feedparser.parse(feed_url)
+                    for entry in feed.entries[:num_results]:
+                         results.append({
+                            'href': entry.get('link', ''),
+                            'title': entry.get('title', ''),
+                            'body': entry.get('summary', '')
+                        })
+                    if results:
+                        break # Stop after filling from one feed
+                except:
+                    continue
+
+        return results[:num_results]
 
     def search_articles(self, keyword, num_results=10):
         """
@@ -151,7 +175,7 @@ class NewsScraper:
 
         # 3. Fallback to RSS Feeds
         try:
-            results = self._search_feed(keyword)
+            results = self._search_feed(keyword, num_results)
             if results:
                  return results
         except Exception as e:

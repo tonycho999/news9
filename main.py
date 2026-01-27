@@ -27,7 +27,8 @@ def index():
 def search():
     data = request.json
     keyword = data.get('keyword')
-    num_results = int(data.get('num_results', 5))
+    # Default to 20 if not specified
+    num_results = int(data.get('num_results', 20))
 
     if not keyword:
         return jsonify({'error': 'Keyword is required'}), 400
