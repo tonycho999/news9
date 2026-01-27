@@ -35,12 +35,12 @@ class NewsScraper:
                 pass
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(5), retry=retry_if_exception_type(Exception))
-    def _search_ddg(self, query, num_results):
+    def _search_ddg(self, query, num_results, time_period='d'):
         results = []
         with DDGS() as ddgs:
             # region='ph-ph' targets Philippines
-            # timelimit='d' means last day (today)
-            ddgs_gen = ddgs.text(query, region='ph-ph', timelimit='d', max_results=num_results)
+            # timelimit: d (day), w (week), m (month), y (year)
+            ddgs_gen = ddgs.text(query, region='ph-ph', timelimit=time_period, max_results=num_results)
             for r in ddgs_gen:
                 results.append(r)
         return results
@@ -148,18 +148,18 @@ class NewsScraper:
 
         return results[:num_results]
 
-    def search_articles(self, keyword, num_results=10):
+    def search_articles(self, keyword, num_results=10, time_period='d'):
         """
         Searches for articles using DuckDuckGo with a Philippines region context.
         Returns a list of dictionaries with 'href', 'title', 'body'.
         """
         query = f"{keyword} news Philippines"
 
-        print(f"Searching for: {query}")
+        print(f"Searching for: {query} (Period: {time_period})")
 
         # 1. Try DuckDuckGo
         try:
-            results = self._search_ddg(query, num_results)
+            results = self._search_ddg(query, num_results, time_period)
             if results:
                 return results
         except Exception as e:

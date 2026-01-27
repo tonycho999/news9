@@ -27,15 +27,16 @@ def index():
 def search():
     data = request.json
     keyword = data.get('keyword')
-    # Default to 20 if not specified
-    num_results = int(data.get('num_results', 20))
+    # Default to 50 if not specified (backend safety)
+    num_results = int(data.get('num_results', 50))
+    time_period = data.get('time_period', 'd') # d, w, m, y
 
     if not keyword:
         return jsonify({'error': 'Keyword is required'}), 400
 
     try:
         # Search for links
-        links = scraper.search_articles(keyword, num_results=num_results)
+        links = scraper.search_articles(keyword, num_results=num_results, time_period=time_period)
 
         results = []
         for link in links:
