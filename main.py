@@ -12,8 +12,9 @@ app.secret_key = 'philinews_secret_key'
 
 # Temporary storage for generated files to allow download
 # In production, use a proper temp directory or object storage with cleanup
-DOWNLOAD_FOLDER = os.path.join(os.getcwd(), 'downloads')
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+# Use /tmp for serverless environments (Vercel)
+import tempfile
+DOWNLOAD_FOLDER = tempfile.gettempdir()
 
 scraper = NewsScraper()
 exporter = NewsExporter()
