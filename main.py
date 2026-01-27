@@ -30,13 +30,21 @@ def search():
     # Default to 50 if not specified (backend safety)
     num_results = int(data.get('num_results', 50))
     time_period = data.get('time_period', 'd') # d, w, m, y
+    start_date = data.get('start_date')
+    end_date = data.get('end_date')
 
     if not keyword:
         return jsonify({'error': 'Keyword is required'}), 400
 
     try:
         # Search for links
-        links = scraper.search_articles(keyword, num_results=num_results, time_period=time_period)
+        links = scraper.search_articles(
+            keyword,
+            num_results=num_results,
+            time_period=time_period,
+            start_date=start_date,
+            end_date=end_date
+        )
 
         results = []
         for link in links:

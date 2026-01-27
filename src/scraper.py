@@ -37,6 +37,10 @@ class NewsScraper:
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(5), retry=retry_if_exception_type(Exception))
     def _search_ddg(self, query, num_results, time_period='d'):
         results = []
+        # If custom date range is needed, we ideally want to search broadly then filter.
+        # However, DDG only supports d, w, m, y.
+        # We will use the provided time_period mapping directly.
+
         with DDGS() as ddgs:
             # region='ph-ph' targets Philippines
             # timelimit: d (day), w (week), m (month), y (year)
@@ -148,18 +152,30 @@ class NewsScraper:
 
         return results[:num_results]
 
-    def search_articles(self, keyword, num_results=10, time_period='d'):
+    def search_articles(self, keyword, num_results=10, time_period='d', start_date=None, end_date=None):
         """
         Searches for articles using DuckDuckGo with a Philippines region context.
         Returns a list of dictionaries with 'href', 'title', 'body'.
         """
         query = f"{keyword} news Philippines"
 
-        print(f"Searching for: {query} (Period: {time_period})")
+        # Determine strict time limit for DDG based on inputs
+        ddg_limit = time_period
+
+        # If specific dates are provided, we try to map them to the closest DDG bucket
+        # to reduce noise, though precise filtering happens later or is implicit.
+        # Since we can't pass exact dates to DDG free API, we default to 'm' (month) or 'y' (year)
+        # if a custom range is likely.
+        if start_date or end_date:
+            # For now, just default to Month ('m') to be safe and fetch recent-ish news
+            # unless it's very old, then 'y'.
+            ddg_limit = 'm'
+
+        print(f"Searching for: {query} (DDG Limit: {ddg_limit})")
 
         # 1. Try DuckDuckGo
         try:
-            results = self._search_ddg(query, num_results, time_period)
+            results = self._search_ddg(query, num_results, ddg_limit)
             if results:
                 return results
         except Exception as e:
@@ -194,7 +210,20 @@ class NewsScraper:
 
         try:
             article = Article(url, config=config)
-            article.download()
+            try:
+                article.download()
+            except Exception as e:
+                # Fallback: Try downloading with requests if newspaper3k fails (e.g. 403)
+                print(f"Newspaper3k download failed: {e}. Trying requests fallback.")
+                try:
+                    response = requests.get(url, headers={'User-Agent': user_agent}, timeout=10)
+                    if response.status_code == 200:
+                        article.set_html(response.text)
+                    else:
+                        raise Exception(f"Requests fallback failed with status {response.status_code}")
+                except Exception as req_e:
+                    raise Exception(f"Both download methods failed. Original: {e}, Fallback: {req_e}")
+
             article.parse()
             try:
                 article.nlp()

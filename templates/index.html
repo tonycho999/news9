@@ -39,14 +39,15 @@
                 <div class="mb-3">
                     <input type="text" id="keyword" class="form-control form-control-lg" placeholder="Enter keyword (e.g. Traffic)">
                 </div>
-                <div class="mb-3">
-                    <label class="form-label text-muted small">Time Period</label>
-                    <select class="form-select" id="timePeriod">
-                        <option value="d">Past 24 Hours</option>
-                        <option value="w">Past Week</option>
-                        <option value="m">Past Month</option>
-                        <option value="y">Past Year</option>
-                    </select>
+                <div class="row mb-3">
+                    <div class="col-6">
+                        <label class="form-label text-muted small">Start Date</label>
+                        <input type="date" class="form-control" id="startDate">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label text-muted small">End Date</label>
+                        <input type="date" class="form-control" id="endDate">
+                    </div>
                 </div>
                 <button class="btn btn-primary btn-lg w-100" onclick="searchNews()">Search News</button>
             </div>
@@ -93,6 +94,16 @@
         let selectedIndices = new Set();
         let deferredPrompt;
 
+        // Set default dates
+        window.addEventListener('DOMContentLoaded', (event) => {
+            const today = new Date();
+            const lastWeek = new Date();
+            lastWeek.setDate(today.getDate() - 7);
+
+            document.getElementById('endDate').valueAsDate = today;
+            document.getElementById('startDate').valueAsDate = lastWeek;
+        });
+
         // Service Worker Registration
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/sw.js')
@@ -117,9 +128,11 @@
 
         async function searchNews() {
             const keyword = document.getElementById('keyword').value;
-            const timePeriod = document.getElementById('timePeriod').value;
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
 
             if (!keyword) return alert("Please enter a keyword");
+            if (!startDate || !endDate) return alert("Please select a date range");
 
             // Hidden maximum limit of 50
             const numResults = 50;
@@ -132,7 +145,12 @@
                 const response = await fetch('/api/search', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ keyword, num_results: numResults, time_period: timePeriod })
+                    body: JSON.stringify({
+                        keyword,
+                        num_results: numResults,
+                        start_date: startDate,
+                        end_date: endDate
+                    })
                 });
 
                 const data = await response.json();
