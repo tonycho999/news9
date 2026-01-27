@@ -1,0 +1,13 @@
+streamlit
+duckduckgo-search
+newspaper3k
+fpdf
+python-pptx
+lxml<5.0.0
+nltk
+tenacity
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+googlesearch-python
