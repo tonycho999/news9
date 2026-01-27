@@ -10,15 +10,31 @@ try:
 except ImportError:
     google_search = None
 
+import os
+
 class NewsScraper:
     def __init__(self):
+        # Configure NLTK data path for serverless environments (read-only FS)
+        # Use /tmp/nltk_data if writable, otherwise rely on pre-installed paths
+        nltk_data_path = os.path.join(os.path.abspath(os.sep), "tmp", "nltk_data")
+        if nltk_data_path not in nltk.data.path:
+            nltk.data.path.append(nltk_data_path)
+
         # Ensure punkt is available
         try:
             nltk.data.find('tokenizers/punkt')
             nltk.data.find('tokenizers/punkt_tab')
         except LookupError:
-            nltk.download('punkt')
-            nltk.download('punkt_tab')
+            try:
+                # Try downloading to /tmp/nltk_data
+                if not os.path.exists(nltk_data_path):
+                    os.makedirs(nltk_data_path, exist_ok=True)
+                nltk.download('punkt', download_dir=nltk_data_path)
+                nltk.download('punkt_tab', download_dir=nltk_data_path)
+            except Exception as e:
+                print(f"Failed to download NLTK data: {e}")
+                # Fallback: Depending on usage, NLP features might degrade but app shouldn't crash
+                pass
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(5), retry=retry_if_exception_type(Exception))
     def _search_ddg(self, query, num_results):
