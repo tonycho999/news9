@@ -6,6 +6,7 @@ from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_t
 import os
 import requests
 import feedparser
+import primp
 
 # Try to import googlesearch as fallback
 try:
@@ -213,16 +214,39 @@ class NewsScraper:
             try:
                 article.download()
             except Exception as e:
-                # Fallback: Try downloading with requests if newspaper3k fails (e.g. 403)
+                # Fallback 1: Requests with full headers
                 print(f"Newspaper3k download failed: {e}. Trying requests fallback.")
                 try:
-                    response = requests.get(url, headers={'User-Agent': user_agent}, timeout=10)
+                    headers = {
+                        'User-Agent': user_agent,
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.5',
+                        'Referer': 'https://www.google.com/'
+                    }
+                    response = requests.get(url, headers=headers, timeout=10)
                     if response.status_code == 200:
                         article.set_html(response.text)
                     else:
-                        raise Exception(f"Requests fallback failed with status {response.status_code}")
+                        # Fallback 2: Primp (Browser Impersonation)
+                        print(f"Requests fallback failed ({response.status_code}). Trying primp...")
+                        client = primp.Client(impersonate="chrome_124")
+                        resp = client.get(url, timeout=15)
+                        if resp.status_code == 200:
+                            article.set_html(resp.text)
+                        else:
+                             raise Exception(f"Primp failed with status {resp.status_code}")
                 except Exception as req_e:
-                    raise Exception(f"Both download methods failed. Original: {e}, Fallback: {req_e}")
+                     # One last try with primp if requests raised an exception (not just bad status)
+                     try:
+                        print(f"Requests exception: {req_e}. Last attempt with primp...")
+                        client = primp.Client(impersonate="chrome_124")
+                        resp = client.get(url, timeout=15)
+                        if resp.status_code == 200:
+                            article.set_html(resp.text)
+                        else:
+                             raise Exception(f"Primp failed with status {resp.status_code}")
+                     except Exception as primp_e:
+                        raise Exception(f"All download methods failed. Original: {e}, Primp: {primp_e}")
 
             article.parse()
             try:
