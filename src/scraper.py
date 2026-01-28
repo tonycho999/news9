@@ -1,6 +1,7 @@
 import datetime
 from duckduckgo_search import DDGS
 from newspaper import Article, Config
+from newspaper.article import ArticleDownloadState
 import nltk
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 import os
@@ -213,6 +214,8 @@ class NewsScraper:
             article = Article(url, config=config)
             try:
                 article.download()
+                if article.download_state != ArticleDownloadState.SUCCESS:
+                    raise Exception(f"Download failed with state {article.download_state}")
             except Exception as e:
                 # Fallback 1: Requests with full headers
                 print(f"Newspaper3k download failed: {e}. Trying requests fallback.")
