@@ -232,7 +232,21 @@ class NewsScraper:
                     else:
                         # Fallback 2: Primp (Browser Impersonation)
                         print(f"Requests fallback failed ({response.status_code}). Trying primp...")
-                        client = primp.Client(impersonate="chrome_124")
+
+                        # Use specific headers and impersonation that is known to work
+                        primp_headers = {
+                            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Referer": "https://www.google.com/",
+                            "Upgrade-Insecure-Requests": "1",
+                            "Sec-Fetch-Dest": "document",
+                            "Sec-Fetch-Mode": "navigate",
+                            "Sec-Fetch-Site": "cross-site",
+                            "Sec-Fetch-User": "?1",
+                        }
+
+                        client = primp.Client(impersonate="chrome_100", headers=primp_headers, follow_redirects=True)
                         resp = client.get(url, timeout=15)
                         if resp.status_code == 200:
                             article.set_html(resp.text)
@@ -242,7 +256,20 @@ class NewsScraper:
                      # One last try with primp if requests raised an exception (not just bad status)
                      try:
                         print(f"Requests exception: {req_e}. Last attempt with primp...")
-                        client = primp.Client(impersonate="chrome_124")
+
+                        primp_headers = {
+                            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Referer": "https://www.google.com/",
+                            "Upgrade-Insecure-Requests": "1",
+                            "Sec-Fetch-Dest": "document",
+                            "Sec-Fetch-Mode": "navigate",
+                            "Sec-Fetch-Site": "cross-site",
+                            "Sec-Fetch-User": "?1",
+                        }
+
+                        client = primp.Client(impersonate="chrome_100", headers=primp_headers, follow_redirects=True)
                         resp = client.get(url, timeout=15)
                         if resp.status_code == 200:
                             article.set_html(resp.text)
