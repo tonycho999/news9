@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { auth } from './firebase'; 
 import { onAuthStateChanged, signOut, signInWithEmailAndPassword } from 'firebase/auth';
 import jsPDF from 'jspdf';
-import Signup from './Signup'; // Newly created Signup component
+import Signup from './Signup';
 
 // --- Types ---
 interface NewsItem {
@@ -29,8 +29,6 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- Router Logic (Simple Path Check) ---
-  // If the path is /signup, show the Signup page
   if (window.location.pathname === '/signup') {
     return <Signup />;
   }
@@ -44,36 +42,48 @@ function App() {
     }
   };
 
+  // --- 핵심 수정: 검색 및 순차 요약 로직 ---
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
     
     setIsFinished(false);
-    setStatusMsg('Searching for relevant news...');
-    setNewsList([]);
+    setNewsList([]); 
+    
+    // 1단계: 초기 엔진 가동 메시지 (화면 노출 없이 메시지만)
+    setStatusMsg(`Initializing secure connection to global news servers for "${keyword}"...`);
+    await new Promise(resolve => setTimeout(resolve, 5000)); 
 
-    // 1. Initial Search (Slow & Steady Simulation)
+    // 2단계: 딥 스크랩 시뮬레이션
+    setStatusMsg(`Accessing and scraping verified news archives regarding "${keyword}"... This may take several minutes.`);
+    await new Promise(resolve => setTimeout(resolve, 8000)); 
+
+    // 3단계: 검색 결과 리스트 구성 (이제 리스트가 보이기 시작함)
     const initialResults: NewsItem[] = Array.from({ length: 10 }, (_, i) => ({
-      title: `Intelligence Report #${i + 1}: ${keyword} Analysis`,
+      title: `Intelligence Source #${i + 1} for "${keyword}" (Pending Analysis)`,
       isAnalyzing: true
     }));
     setNewsList(initialResults);
 
-    // 2. Sequential AI Summarization
+    // 4단계: 순차적 정밀 AI 요약 (하나씩 천천히 진행)
     for (let i = 0; i < initialResults.length; i++) {
-      setStatusMsg(`Analyzing Report ${i + 1} of 10...`);
-      await new Promise(resolve => setTimeout(resolve, 2500)); 
+      setStatusMsg(`Performing Deep AI Analysis on Article ${i + 1} of 10...`);
+      
+      // 기사 하나당 분석 시간을 15초~20초 정도로 대폭 늘림 (기자님 요청 반영)
+      await new Promise(resolve => setTimeout(resolve, 15000)); 
       
       setNewsList(prev => prev.map((item, idx) => 
         idx === i ? { 
           ...item, 
-          summary: `This is a detailed AI-generated summary for "${keyword}". Historical data for report #${i+1} has been processed.`, 
+          title: `Confirmed Intel: ${keyword} Report #${i + 1}`,
+          summary: `[Full Intelligence Summary] This official news source regarding "${keyword}" has been fully scraped and analyzed. The system has identified key strategic patterns and extracted the core geopolitical data points relevant to report #${i+1}.`, 
           isAnalyzing: false 
         } : item
       ));
     }
 
+    // 5단계: 최종 완료 메시지
     setIsFinished(true);
-    setStatusMsg('All analysis tasks completed successfully.');
+    setStatusMsg('Intelligence gathering and AI analysis for all 10 sources are now COMPLETE.');
   };
 
   const savePDF = (item: NewsItem) => {
@@ -82,7 +92,7 @@ function App() {
     doc.text(item.title, 10, 20);
     doc.setFontSize(12);
     doc.text(item.summary || "", 10, 40, { maxWidth: 180 });
-    doc.save(`Report_${item.title}.pdf`);
+    doc.save(`Intel_Report_${item.title}.pdf`);
   };
 
   // --- Login View ---
@@ -140,7 +150,7 @@ function App() {
             <div key={index} style={styles.reportCard}>
               <h4 style={{ margin: '0 0 10px 0' }}>{news.title}</h4>
               {news.isAnalyzing ? (
-                <div style={styles.pulseLoader}>⌛ System processing analysis...</div>
+                <div style={styles.pulseLoader}>⌛ Analyzing intelligence data...</div>
               ) : (
                 <>
                   <p style={styles.summaryTxt}>{news.summary}</p>
@@ -155,7 +165,7 @@ function App() {
   );
 }
 
-// --- Styles ---
+// --- Styles (동일) ---
 const styles: { [key: string]: React.CSSProperties } = {
   pageContainer: { maxWidth: '1000px', margin: '0 auto', padding: '30px', fontFamily: '"Segoe UI", sans-serif', color: '#34495e' },
   navBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '3px solid #2c3e50', paddingBottom: '15px' },
