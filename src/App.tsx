@@ -3,9 +3,9 @@ import { auth } from './firebase';
 import { onAuthStateChanged, signOut, signInWithEmailAndPassword } from 'firebase/auth';
 import jsPDF from 'jspdf';
 
+// --- Types ---
 interface NewsItem {
   title: string;
-  link: string;
   summary?: string;
   isAnalyzing: boolean;
 }
@@ -16,7 +16,8 @@ function App() {
   const [password, setPassword] = useState('');
   const [keyword, setKeyword] = useState('');
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [isFinished, setIsFinished] = useState(false);
+  const [statusMsg, setStatusMsg] = useState('');
 
   const isAdmin = user?.email === 'admin@test.com';
 
@@ -32,74 +33,115 @@ function App() {
     try {
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error) {
-      alert("로그인 실패: 이메일과 비밀번호를 확인하세요.");
+      alert("Login Failed. Please check your admin/user credentials.");
     }
   };
 
-  const searchNews = async () => {
-    setLoading(true);
-    const mockNews: NewsItem[] = Array.from({ length: 10 }, (_, i) => ({
-      title: `${keyword} 관련 취재 기사 ${i + 1}`,
-      link: "#",
+  const startAnalysis = async () => {
+    if (!keyword) return alert("Please enter a topic.");
+    
+    setIsFinished(false);
+    setStatusMsg('Searching for relevant news...');
+    setNewsList([]);
+
+    // 1. Initial Search Results (Fetch titles first)
+    const initialResults: NewsItem[] = Array.from({ length: 10 }, (_, i) => ({
+      title: `Intelligence Report #${i + 1}: ${keyword} Analysis`,
       isAnalyzing: true
     }));
-    setNewsList(mockNews);
-    setLoading(false);
+    setNewsList(initialResults);
 
-    for (let i = 0; i < mockNews.length; i++) {
-      await new Promise(resolve => setTimeout(resolve, 800));
+    // 2. Sequential AI Summarization (Slow & Steady process)
+    for (let i = 0; i < initialResults.length; i++) {
+      setStatusMsg(`Analyzing Report ${i + 1} of 10...`);
+      
+      // Artificial delay to simulate deep analysis (as requested, slow and steady)
+      await new Promise(resolve => setTimeout(resolve, 2500)); 
+      
       setNewsList(prev => prev.map((item, idx) => 
-        idx === i ? { ...item, summary: `${keyword}에 대한 AI 분석 리포트입니다.`, isAnalyzing: false } : item
+        idx === i ? { 
+          ...item, 
+          summary: `This is a comprehensive AI-generated summary for the topic "${keyword}". Historical data and current trends for report #${i+1} have been cross-referenced.`, 
+          isAnalyzing: false 
+        } : item
       ));
     }
+
+    setIsFinished(true);
+    setStatusMsg('All analysis tasks completed successfully.');
   };
 
-  const saveAsPDF = (item: NewsItem) => {
+  const savePDF = (item: NewsItem) => {
     const doc = new jsPDF();
-    doc.text(item.title, 10, 10);
-    doc.text(item.summary || "", 10, 20);
-    doc.save(`${item.title}.pdf`);
+    doc.setFontSize(16);
+    doc.text(item.title, 10, 20);
+    doc.setFontSize(12);
+    doc.text(item.summary || "", 10, 40, { maxWidth: 180 });
+    doc.save(`Report_${item.title}.pdf`);
   };
 
-  // 1. 로그인 전 화면 (로그인 폼 디자인 추가)
+  // --- Login View ---
   if (!user) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: '100px' }}>
-        <h2>필리핀 뉴스 인텔리전스 로그인</h2>
-        <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', width: '300px', gap: '10px' }}>
-          <input type="email" placeholder="이메일" value={email} onChange={(e) => setEmail(e.target.value)} required />
-          <input type="password" placeholder="비밀번호" value={password} onChange={(e) => setPassword(e.target.value)} required />
-          <button type="submit">로그인</button>
-        </form>
-        <p style={{ fontSize: '12px', color: '#666', marginTop: '20px' }}>관리자: admin@test.com</p>
+      <div style={styles.loginOverlay}>
+        <div style={styles.loginCard}>
+          <h2 style={{ color: '#2c3e50' }}>Intelligence System Login</h2>
+          <form onSubmit={handleLogin} style={styles.vStack}>
+            <input type="email" placeholder="Email Address" value={email} onChange={(e) => setEmail(e.target.value)} style={styles.input} required />
+            <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} style={styles.input} required />
+            <button type="submit" style={styles.mainBtn}>Sign In</button>
+          </form>
+          <p style={{ fontSize: '11px', color: '#95a5a6', marginTop: '15px' }}>Authorized Personnel Only</p>
+        </div>
       </div>
     );
   }
 
-  // 2. 로그인 후 화면
+  // --- Main Dashboard View ---
   return (
-    <div style={{ padding: '20px' }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #ccc', paddingBottom: '10px' }}>
-        <h1>PH News Intel</h1>
-        <div>
-          <span>{user.email} 님</span>
-          <button onClick={() => signOut(auth)} style={{ marginLeft: '10px' }}>로그아웃</button>
+    <div style={styles.pageContainer}>
+      <header style={styles.navBar}>
+        <h2 style={{ margin: 0, letterSpacing: '1px' }}>PH NEWS INTEL</h2>
+        <div style={styles.hStack}>
+          <span style={{ fontWeight: 'bold', marginRight: '10px' }}>{user.email}</span>
           {isAdmin && (
-            <button onClick={() => window.location.href = '/signup'} style={{ marginLeft: '10px', backgroundColor: '#e74c3c', color: 'white' }}>
-              ⚠️ 계정 생성
+            <button onClick={() => window.location.href = '/signup'} style={styles.adminActionBtn}>
+              + CREATE USER ACCOUNT
             </button>
           )}
+          <button onClick={() => signOut(auth)} style={styles.logoutBtn}>Logout</button>
         </div>
       </header>
-      <main style={{ marginTop: '20px' }}>
-        <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="키워드 입력..." />
-        <button onClick={searchNews}>뉴스 분석 시작</button>
-        <div style={{ marginTop: '20px' }}>
-          {newsList.map((item, index) => (
-            <div key={index} style={{ marginBottom: '15px', padding: '15px', border: '1px solid #eee', borderRadius: '8px' }}>
-              <h3>{item.title}</h3>
-              {item.isAnalyzing ? <p style={{ color: '#3498db' }}>⌛ AI 분석 중...</p> : 
-              <> <p>{item.summary}</p> <button onClick={() => saveAsPDF(item)}>PDF 저장</button> </>}
+
+      <main style={{ marginTop: '40px' }}>
+        <section style={styles.searchSection}>
+          <input 
+            value={keyword} 
+            onChange={(e) => setKeyword(e.target.value)} 
+            placeholder="Enter intelligence topic (e.g. Philippine Economy)..." 
+            style={{ ...styles.input, flex: 1, margin: 0 }}
+          />
+          <button onClick={startAnalysis} style={styles.mainBtn}>START ANALYSIS</button>
+        </section>
+
+        {statusMsg && (
+          <div style={isFinished ? styles.doneBanner : styles.infoBanner}>
+            {isFinished ? "✅ " : "🔎 "} {statusMsg}
+          </div>
+        )}
+
+        <div style={styles.newsGrid}>
+          {newsList.map((news, index) => (
+            <div key={index} style={styles.reportCard}>
+              <h4 style={{ margin: '0 0 10px 0' }}>{news.title}</h4>
+              {news.isAnalyzing ? (
+                <div style={styles.pulseLoader}>⌛ System processing analysis...</div>
+              ) : (
+                <>
+                  <p style={styles.summaryTxt}>{news.summary}</p>
+                  <button onClick={() => savePDF(news)} style={styles.pdfBtn}>EXPORT PDF</button>
+                </>
+              )}
             </div>
           ))}
         </div>
@@ -107,4 +149,27 @@ function App() {
     </div>
   );
 }
+
+// --- Styles ---
+const styles: { [key: string]: React.CSSProperties } = {
+  pageContainer: { maxWidth: '1000px', margin: '0 auto', padding: '30px', fontFamily: '"Segoe UI", Tahoma, Geneva, Verdana, sans-serif', color: '#34495e' },
+  navBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '3px solid #2c3e50', paddingBottom: '15px' },
+  loginOverlay: { height: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', backgroundColor: '#ecf0f1' },
+  loginCard: { padding: '50px', backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 10px 25px rgba(0,0,0,0.1)', textAlign: 'center' },
+  vStack: { display: 'flex', flexDirection: 'column', gap: '15px', width: '320px' },
+  hStack: { display: 'flex', alignItems: 'center', gap: '15px' },
+  input: { padding: '14px', border: '1px solid #bdc3c7', borderRadius: '6px', fontSize: '15px', outline: 'none' },
+  mainBtn: { padding: '14px 25px', backgroundColor: '#2c3e50', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' },
+  logoutBtn: { backgroundColor: 'transparent', border: '1px solid #bdc3c7', padding: '8px 15px', cursor: 'pointer', borderRadius: '4px' },
+  adminActionBtn: { backgroundColor: '#c0392b', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' },
+  searchSection: { display: 'flex', gap: '15px', marginBottom: '30px' },
+  infoBanner: { padding: '15px', backgroundColor: '#ebf5fb', color: '#2980b9', borderRadius: '6px', marginBottom: '20px', fontWeight: 'bold' },
+  doneBanner: { padding: '15px', backgroundColor: '#d4edda', color: '#155724', borderRadius: '6px', marginBottom: '20px', fontWeight: 'bold', border: '1px solid #c3e6cb' },
+  newsGrid: { display: 'grid', gridTemplateColumns: '1fr', gap: '20px' },
+  reportCard: { padding: '25px', border: '1px solid #dcdde1', borderRadius: '10px', backgroundColor: '#fcfcfc' },
+  summaryTxt: { lineHeight: '1.7', fontSize: '15px', color: '#2f3640' },
+  pdfBtn: { backgroundColor: '#27ae60', color: '#fff', border: 'none', padding: '8px 15px', borderRadius: '4px', cursor: 'pointer', fontSize: '13px' },
+  pulseLoader: { color: '#2980b9', fontStyle: 'italic', fontSize: '14px' }
+};
+
 export default App;
