@@ -1,5 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
+import { getFirestore } from "firebase/firestore"; // Firestore 추가
 
 const firebaseConfig = {
   apiKey: "AIzaSyDdyLCiNuJ8x-iSH0OT3Jrwte_X1w97I8k",
@@ -13,3 +14,4 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+export const db = getFirestore(app); // db를 외부에서 쓸 수 있게 내보냄
