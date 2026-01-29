@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-// 경로 수정: firebase.ts가 루트에 있다면 '../firebase'로, src에 있다면 './firebase'로 유지
 import { auth } from './firebase'; 
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import jsPDF from 'jspdf';
@@ -16,7 +15,6 @@ function App() {
   const [keyword, setKeyword] = useState('');
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
   const [loading, setLoading] = useState(false);
-
   const isAdmin = user?.email === 'admin@test.com';
 
   useEffect(() => {
@@ -55,13 +53,11 @@ function App() {
 
   return (
     <div style={{ padding: '20px' }}>
-      {/* pb를 paddingBottom으로 수정하여 에러 해결 */}
       <header style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #ccc', paddingBottom: '10px' }}>
         <h1>필리핀 뉴스 인텔리전스</h1>
         <div>
           <span>{user.email} 기자님</span>
           <button onClick={() => signOut(auth)} style={{ marginLeft: '10px' }}>로그아웃</button>
-          
           {isAdmin && (
             <button 
               onClick={() => window.location.href = '/signup'} 
@@ -72,27 +68,15 @@ function App() {
           )}
         </div>
       </header>
-
       <main style={{ marginTop: '20px' }}>
-        <input 
-          value={keyword} 
-          onChange={(e) => setKeyword(e.target.value)} 
-          placeholder="검색어를 입력하세요..." 
-        />
+        <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="검색어를 입력하세요..." />
         <button onClick={searchNews}>취재 시작</button>
-
         <div style={{ marginTop: '20px' }}>
           {newsList.map((item, index) => (
             <div key={index} style={{ marginBottom: '15px', padding: '10px', border: '1px solid #eee' }}>
               <h3>{item.title}</h3>
-              {item.isAnalyzing ? (
-                <p style={{ color: 'blue' }}>⏳ AI가 기사를 분석 중입니다...</p>
-              ) : (
-                <>
-                  <p>{item.summary}</p>
-                  <button onClick={() => saveAsPDF(item)}>PDF 리포트 저장</button>
-                </>
-              )}
+              {item.isAnalyzing ? <p style={{ color: 'blue' }}>⏳ AI 분석 중...</p> : 
+              <> <p>{item.summary}</p> <button onClick={() => saveAsPDF(item)}>PDF 저장</button> </>}
             </div>
           ))}
         </div>
@@ -100,5 +84,4 @@ function App() {
     </div>
   );
 }
-
 export default App;
