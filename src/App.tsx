@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { auth } from './firebase'; 
 import { onAuthStateChanged, signOut, signInWithEmailAndPassword } from 'firebase/auth';
 import jsPDF from 'jspdf';
+import Signup from './Signup'; // Newly created Signup component
 
 // --- Types ---
 interface NewsItem {
@@ -28,12 +29,18 @@ function App() {
     return () => unsubscribe();
   }, []);
 
+  // --- Router Logic (Simple Path Check) ---
+  // If the path is /signup, show the Signup page
+  if (window.location.pathname === '/signup') {
+    return <Signup />;
+  }
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error) {
-      alert("Login Failed. Please check your admin/user credentials.");
+      alert("Login Failed. Please check your credentials.");
     }
   };
 
@@ -44,24 +51,22 @@ function App() {
     setStatusMsg('Searching for relevant news...');
     setNewsList([]);
 
-    // 1. Initial Search Results (Fetch titles first)
+    // 1. Initial Search (Slow & Steady Simulation)
     const initialResults: NewsItem[] = Array.from({ length: 10 }, (_, i) => ({
       title: `Intelligence Report #${i + 1}: ${keyword} Analysis`,
       isAnalyzing: true
     }));
     setNewsList(initialResults);
 
-    // 2. Sequential AI Summarization (Slow & Steady process)
+    // 2. Sequential AI Summarization
     for (let i = 0; i < initialResults.length; i++) {
       setStatusMsg(`Analyzing Report ${i + 1} of 10...`);
-      
-      // Artificial delay to simulate deep analysis (as requested, slow and steady)
       await new Promise(resolve => setTimeout(resolve, 2500)); 
       
       setNewsList(prev => prev.map((item, idx) => 
         idx === i ? { 
           ...item, 
-          summary: `This is a comprehensive AI-generated summary for the topic "${keyword}". Historical data and current trends for report #${i+1} have been cross-referenced.`, 
+          summary: `This is a detailed AI-generated summary for "${keyword}". Historical data for report #${i+1} has been processed.`, 
           isAnalyzing: false 
         } : item
       ));
@@ -103,7 +108,7 @@ function App() {
       <header style={styles.navBar}>
         <h2 style={{ margin: 0, letterSpacing: '1px' }}>PH NEWS INTEL</h2>
         <div style={styles.hStack}>
-          <span style={{ fontWeight: 'bold', marginRight: '10px' }}>{user.email}</span>
+          <span style={{ fontWeight: 'bold' }}>{user.email}</span>
           {isAdmin && (
             <button onClick={() => window.location.href = '/signup'} style={styles.adminActionBtn}>
               + CREATE USER ACCOUNT
@@ -118,7 +123,7 @@ function App() {
           <input 
             value={keyword} 
             onChange={(e) => setKeyword(e.target.value)} 
-            placeholder="Enter intelligence topic (e.g. Philippine Economy)..." 
+            placeholder="Enter intelligence topic..." 
             style={{ ...styles.input, flex: 1, margin: 0 }}
           />
           <button onClick={startAnalysis} style={styles.mainBtn}>START ANALYSIS</button>
@@ -152,13 +157,13 @@ function App() {
 
 // --- Styles ---
 const styles: { [key: string]: React.CSSProperties } = {
-  pageContainer: { maxWidth: '1000px', margin: '0 auto', padding: '30px', fontFamily: '"Segoe UI", Tahoma, Geneva, Verdana, sans-serif', color: '#34495e' },
+  pageContainer: { maxWidth: '1000px', margin: '0 auto', padding: '30px', fontFamily: '"Segoe UI", sans-serif', color: '#34495e' },
   navBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '3px solid #2c3e50', paddingBottom: '15px' },
   loginOverlay: { height: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', backgroundColor: '#ecf0f1' },
   loginCard: { padding: '50px', backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 10px 25px rgba(0,0,0,0.1)', textAlign: 'center' },
   vStack: { display: 'flex', flexDirection: 'column', gap: '15px', width: '320px' },
   hStack: { display: 'flex', alignItems: 'center', gap: '15px' },
-  input: { padding: '14px', border: '1px solid #bdc3c7', borderRadius: '6px', fontSize: '15px', outline: 'none' },
+  input: { padding: '14px', border: '1px solid #bdc3c7', borderRadius: '6px', fontSize: '15px' },
   mainBtn: { padding: '14px 25px', backgroundColor: '#2c3e50', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' },
   logoutBtn: { backgroundColor: 'transparent', border: '1px solid #bdc3c7', padding: '8px 15px', cursor: 'pointer', borderRadius: '4px' },
   adminActionBtn: { backgroundColor: '#c0392b', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' },
@@ -167,9 +172,9 @@ const styles: { [key: string]: React.CSSProperties } = {
   doneBanner: { padding: '15px', backgroundColor: '#d4edda', color: '#155724', borderRadius: '6px', marginBottom: '20px', fontWeight: 'bold', border: '1px solid #c3e6cb' },
   newsGrid: { display: 'grid', gridTemplateColumns: '1fr', gap: '20px' },
   reportCard: { padding: '25px', border: '1px solid #dcdde1', borderRadius: '10px', backgroundColor: '#fcfcfc' },
-  summaryTxt: { lineHeight: '1.7', fontSize: '15px', color: '#2f3640' },
-  pdfBtn: { backgroundColor: '#27ae60', color: '#fff', border: 'none', padding: '8px 15px', borderRadius: '4px', cursor: 'pointer', fontSize: '13px' },
-  pulseLoader: { color: '#2980b9', fontStyle: 'italic', fontSize: '14px' }
+  summaryTxt: { lineHeight: '1.7', fontSize: '15px' },
+  pdfBtn: { backgroundColor: '#27ae60', color: '#fff', border: 'none', padding: '8px 15px', borderRadius: '4px', cursor: 'pointer' },
+  pulseLoader: { color: '#2980b9', fontStyle: 'italic' }
 };
 
 export default App;
