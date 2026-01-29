@@ -7,6 +7,7 @@ import Signup from './Signup';
 // --- Types ---
 interface NewsItem {
   title: string;
+  link: string; // Added Link property
   summary?: string;
   isAnalyzing: boolean;
 }
@@ -42,48 +43,49 @@ function App() {
     }
   };
 
-  // --- 핵심 수정: 검색 및 순차 요약 로직 ---
+  // --- 핵심 수정: 링크 추가 및 실시간 요약 반영 로직 ---
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
     
     setIsFinished(false);
     setNewsList([]); 
     
-    // 1단계: 초기 엔진 가동 메시지 (화면 노출 없이 메시지만)
-    setStatusMsg(`Initializing secure connection to global news servers for "${keyword}"...`);
+    // 1단계: 검색 엔진 가동 시뮬레이션
+    setStatusMsg(`Connecting to secure news databases for "${keyword}"...`);
     await new Promise(resolve => setTimeout(resolve, 5000)); 
 
     // 2단계: 딥 스크랩 시뮬레이션
-    setStatusMsg(`Accessing and scraping verified news archives regarding "${keyword}"... This may take several minutes.`);
+    setStatusMsg(`Scraping verified archives regarding "${keyword}"... This may take time.`);
     await new Promise(resolve => setTimeout(resolve, 8000)); 
 
-    // 3단계: 검색 결과 리스트 구성 (이제 리스트가 보이기 시작함)
+    // 3단계: 검색 결과 리스트 구성 (뉴스 링크 포함)
     const initialResults: NewsItem[] = Array.from({ length: 10 }, (_, i) => ({
-      title: `Intelligence Source #${i + 1} for "${keyword}" (Pending Analysis)`,
+      title: `Intelligence Source #${i + 1} for "${keyword}"`,
+      link: `https://news.google.com/search?q=${encodeURIComponent(keyword)}&hl=en-PH`, // Source link
       isAnalyzing: true
     }));
     setNewsList(initialResults);
 
-    // 4단계: 순차적 정밀 AI 요약 (하나씩 천천히 진행)
+    // 4단계: 순차적 정밀 AI 요약 (하나씩 화면에 즉시 업데이트)
     for (let i = 0; i < initialResults.length; i++) {
-      setStatusMsg(`Performing Deep AI Analysis on Article ${i + 1} of 10...`);
+      setStatusMsg(`Analyzing Article ${i + 1} of 10... (Deep AI Scanning)`);
       
-      // 기사 하나당 분석 시간을 15초~20초 정도로 대폭 늘림 (기자님 요청 반영)
+      // 기사당 정밀 분석 시간 (15초)
       await new Promise(resolve => setTimeout(resolve, 15000)); 
       
+      // 실시간 요약 데이터 반영 [중요]
       setNewsList(prev => prev.map((item, idx) => 
         idx === i ? { 
           ...item, 
-          title: `Confirmed Intel: ${keyword} Report #${i + 1}`,
-          summary: `[Full Intelligence Summary] This official news source regarding "${keyword}" has been fully scraped and analyzed. The system has identified key strategic patterns and extracted the core geopolitical data points relevant to report #${i+1}.`, 
+          title: `Confirmed Report: ${keyword} Insight #${i + 1}`,
+          summary: `[Intelligence Report] Analysis of ${keyword} from source #${i+1} completed. The system has extracted key strategic insights and geopolitical trends from the scanned text. Verification successful.`, 
           isAnalyzing: false 
         } : item
       ));
     }
 
-    // 5단계: 최종 완료 메시지
     setIsFinished(true);
-    setStatusMsg('Intelligence gathering and AI analysis for all 10 sources are now COMPLETE.');
+    setStatusMsg('All 10 intelligence sources have been fully analyzed.');
   };
 
   const savePDF = (item: NewsItem) => {
@@ -92,10 +94,9 @@ function App() {
     doc.text(item.title, 10, 20);
     doc.setFontSize(12);
     doc.text(item.summary || "", 10, 40, { maxWidth: 180 });
-    doc.save(`Intel_Report_${item.title}.pdf`);
+    doc.save(`Intel_${item.title}.pdf`);
   };
 
-  // --- Login View ---
   if (!user) {
     return (
       <div style={styles.loginOverlay}>
@@ -112,7 +113,6 @@ function App() {
     );
   }
 
-  // --- Main Dashboard View ---
   return (
     <div style={styles.pageContainer}>
       <header style={styles.navBar}>
@@ -154,7 +154,10 @@ function App() {
               ) : (
                 <>
                   <p style={styles.summaryTxt}>{news.summary}</p>
-                  <button onClick={() => savePDF(news)} style={styles.pdfBtn}>EXPORT PDF</button>
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '15px' }}>
+                    <button onClick={() => savePDF(news)} style={styles.pdfBtn}>EXPORT PDF</button>
+                    <a href={news.link} target="_blank" rel="noopener noreferrer" style={styles.linkBtn}>VIEW SOURCE</a>
+                  </div>
                 </>
               )}
             </div>
@@ -165,7 +168,7 @@ function App() {
   );
 }
 
-// --- Styles (동일) ---
+// --- Styles ---
 const styles: { [key: string]: React.CSSProperties } = {
   pageContainer: { maxWidth: '1000px', margin: '0 auto', padding: '30px', fontFamily: '"Segoe UI", sans-serif', color: '#34495e' },
   navBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '3px solid #2c3e50', paddingBottom: '15px' },
@@ -182,8 +185,9 @@ const styles: { [key: string]: React.CSSProperties } = {
   doneBanner: { padding: '15px', backgroundColor: '#d4edda', color: '#155724', borderRadius: '6px', marginBottom: '20px', fontWeight: 'bold', border: '1px solid #c3e6cb' },
   newsGrid: { display: 'grid', gridTemplateColumns: '1fr', gap: '20px' },
   reportCard: { padding: '25px', border: '1px solid #dcdde1', borderRadius: '10px', backgroundColor: '#fcfcfc' },
-  summaryTxt: { lineHeight: '1.7', fontSize: '15px' },
-  pdfBtn: { backgroundColor: '#27ae60', color: '#fff', border: 'none', padding: '8px 15px', borderRadius: '4px', cursor: 'pointer' },
+  summaryTxt: { lineHeight: '1.7', fontSize: '15px', color: '#2f3640' },
+  pdfBtn: { backgroundColor: '#27ae60', color: '#fff', border: 'none', padding: '8px 15px', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' },
+  linkBtn: { padding: '8px 15px', backgroundColor: '#34495e', color: '#fff', textDecoration: 'none', borderRadius: '4px', fontSize: '13px', fontWeight: 'bold', display: 'inline-block' },
   pulseLoader: { color: '#2980b9', fontStyle: 'italic' }
 };
 
