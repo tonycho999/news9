@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { auth } from './firebase';
+// 경로 수정: firebase.ts가 루트에 있다면 '../firebase'로, src에 있다면 './firebase'로 유지
+import { auth } from './firebase'; 
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import jsPDF from 'jspdf'; // 앞서 설치한 jspdf 라이브러리
+import jsPDF from 'jspdf';
 
-// 뉴스 아이템 타입 정의
 interface NewsItem {
   title: string;
   link: string;
@@ -17,7 +17,6 @@ function App() {
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // 관리자 여부 확인
   const isAdmin = user?.email === 'admin@test.com';
 
   useEffect(() => {
@@ -27,10 +26,8 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // 뉴스 검색 및 순차 요약 로직
   const searchNews = async () => {
     setLoading(true);
-    // 1. 뉴스 제목 10개를 먼저 즉시 가져옵니다.
     const mockNews: NewsItem[] = Array.from({ length: 10 }, (_, i) => ({
       title: `${keyword} 관련 취재 기사 ${i + 1}`,
       link: "#",
@@ -39,16 +36,14 @@ function App() {
     setNewsList(mockNews);
     setLoading(false);
 
-    // 2. 각 기사별로 순차적으로 AI 요약을 진행합니다.
     for (let i = 0; i < mockNews.length; i++) {
-      await new Promise(resolve => setTimeout(resolve, 1000)); // 요약 중임을 시연
+      await new Promise(resolve => setTimeout(resolve, 1000));
       setNewsList(prev => prev.map((item, idx) => 
         idx === i ? { ...item, summary: `${keyword}에 대한 AI 분석 리포트입니다.`, isAnalyzing: false } : item
       ));
     }
   };
 
-  // PDF 저장 기능 (jspdf 활용)
   const saveAsPDF = (item: NewsItem) => {
     const doc = new jsPDF();
     doc.text(item.title, 10, 10);
@@ -56,17 +51,17 @@ function App() {
     doc.save(`${item.title}.pdf`);
   };
 
-  if (!user) return <div>로그인이 필요합니다. (Login form here)</div>;
+  if (!user) return <div style={{ padding: '20px' }}>로그인이 필요합니다.</div>;
 
   return (
     <div style={{ padding: '20px' }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #ccc', pb: '10px' }}>
+      {/* pb를 paddingBottom으로 수정하여 에러 해결 */}
+      <header style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #ccc', paddingBottom: '10px' }}>
         <h1>필리핀 뉴스 인텔리전스</h1>
         <div>
           <span>{user.email} 기자님</span>
-          <button onClick={() => signOut(auth)}>로그아웃</button>
+          <button onClick={() => signOut(auth)} style={{ marginLeft: '10px' }}>로그아웃</button>
           
-          {/* 관리자(admin@test.com)에게만 보이는 버튼 */}
           {isAdmin && (
             <button 
               onClick={() => window.location.href = '/signup'} 
