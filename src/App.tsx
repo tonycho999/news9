@@ -28,12 +28,13 @@ function App() {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
-        // Firestore에서 유저별 API Key 로드
+        // [수정 포인트] Firestore의 실제 필드명(newsKey, apiKey2)과 일치시킴
         const userDoc = await getDoc(doc(db, "users", currentUser.uid));
         if (userDoc.exists()) {
+          const data = userDoc.data();
           setUserKeys({
-            newsKey: userDoc.data().apiKey1,
-            geminiKey: userDoc.data().apiKey2
+            newsKey: data.newsKey || data.apiKey1, // db에 저장된 newsKey 우선 로드
+            geminiKey: data.apiKey2 
           });
         }
       }
@@ -54,26 +55,24 @@ function App() {
     }
   };
 
-  // --- [수정된 핵심 로직: GNews & Gemini API 연동] ---
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
     if (!userKeys?.newsKey || !userKeys?.geminiKey) {
-      return alert("API Keys not found. Please contact admin to register keys via Signup.");
+      return alert("API Keys not found. Please contact admin to verify newsKey in DB.");
     }
 
     setIsFinished(false);
     setNewsList([]); 
     
     try {
-      // 1단계: GNews API로 필리핀 뉴스 가져오기
-      setStatusMsg(`Searching real-time Philippine news for "${keyword}"...`);
+      setStatusMsg(`Connecting to News Engine for "${keyword}"...`);
       const newsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${userKeys.newsKey}`;
       
       const newsResponse = await fetch(newsUrl);
       const newsData = await newsResponse.json();
 
       if (!newsData.articles || newsData.articles.length === 0) {
-        throw new Error("No related news found in Philippine sources.");
+        throw new Error("No results found. Please try another keyword.");
       }
 
       const realArticles: NewsItem[] = newsData.articles.map((art: any) => ({
@@ -83,7 +82,6 @@ function App() {
       }));
       setNewsList(realArticles);
 
-      // 2단계: Gemini API로 하나씩 정밀 요약
       for (let i = 0; i < realArticles.length; i++) {
         setStatusMsg(`Gemini AI analyzing source ${i + 1} of ${realArticles.length}...`);
         
@@ -106,7 +104,6 @@ function App() {
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
         ));
 
-        // API 과부하 방지를 위한 짧은 휴식
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
@@ -121,9 +118,7 @@ function App() {
 
   const savePDF = (item: NewsItem) => {
     const doc = new jsPDF();
-    doc.setFontSize(16);
     doc.text(item.title, 10, 20);
-    doc.setFontSize(12);
     doc.text(item.summary || "", 10, 40, { maxWidth: 180 });
     doc.save(`Intel_${item.title}.pdf`);
   };
