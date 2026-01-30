@@ -28,15 +28,17 @@ function App() {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
-        // [필드명 유연성 확보] Firestore에서 newsKey와 geminiKey/apiKey2를 모두 체크
+        // [수정] 기자님이 보여주신 실제 DB 필드명과 1:1 매칭
         const userDoc = await getDoc(doc(db, "users", currentUser.uid));
         if (userDoc.exists()) {
           const data = userDoc.data();
           setUserKeys({
-            newsKey: data.newsKey || data.apiKey1 || "", 
-            geminiKey: data.geminiKey || data.apiKey2 || ""
+            newsKey: data.newsKey || "",   // DB의 newsKey 필드 읽기
+            geminiKey: data.geminiKey || "" // DB의 geminiKey 필드 읽기
           });
         }
+      } else {
+        setUserKeys(null);
       }
     });
     return () => unsubscribe();
@@ -55,27 +57,30 @@ function App() {
     }
   };
 
-  // --- [GNews & Gemini API 연동 로직] ---
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
     
-    // DB에서 가져온 키 검증
-    if (!userKeys?.newsKey) return alert("News API Key (newsKey) is missing in DB.");
-    if (!userKeys?.geminiKey) return alert("Gemini API Key is missing in DB.");
+    // [검증] 데이터가 정상적으로 로드되었는지 확인
+    if (!userKeys || !userKeys.newsKey) {
+      return alert("News API Key (newsKey) not loaded. Please refresh or check DB.");
+    }
+    if (!userKeys.geminiKey) {
+      return alert("Gemini API Key (geminiKey) not loaded. Please check DB.");
+    }
 
     setIsFinished(false);
     setNewsList([]); 
     
     try {
-      // 1단계: GNews API 필리핀 소스 검색
-      setStatusMsg(`Connecting to GNews for "${keyword}"...`);
+      setStatusMsg(`Searching Philippine news for "${keyword}"...`);
+      // GNews API 연동 (newsKey 사용)
       const newsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${userKeys.newsKey}`;
       
       const newsResponse = await fetch(newsUrl);
       const newsData = await newsResponse.json();
 
       if (!newsData.articles || newsData.articles.length === 0) {
-        throw new Error("No results found in Philippine news sources.");
+        throw new Error("No news found. Try another keyword.");
       }
 
       const realArticles: NewsItem[] = newsData.articles.map((art: any) => ({
@@ -85,10 +90,10 @@ function App() {
       }));
       setNewsList(realArticles);
 
-      // 2단계: Gemini AI 정밀 요약
       for (let i = 0; i < realArticles.length; i++) {
         setStatusMsg(`Gemini AI analyzing article ${i + 1} of ${realArticles.length}...`);
         
+        // Gemini API 연동 (geminiKey 사용)
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${userKeys.geminiKey}`;
         
         const geminiResponse = await fetch(geminiUrl, {
@@ -102,18 +107,17 @@ function App() {
         });
 
         const geminiData = await geminiResponse.json();
-        const summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Deep analysis unavailable for this source.";
+        const summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Deep analysis unavailable.";
 
         setNewsList(prev => prev.map((item, idx) => 
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
         ));
 
-        // 과부하 방지용 짧은 대기
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
       setIsFinished(true);
-      setStatusMsg('Intelligence analysis complete using GNews and Gemini AI.');
+      setStatusMsg('Intelligence analysis complete.');
 
     } catch (error: any) {
       console.error(error);
@@ -123,18 +127,16 @@ function App() {
 
   const savePDF = (item: NewsItem) => {
     const doc = new jsPDF();
-    doc.setFontSize(16);
     doc.text(item.title, 10, 20);
-    doc.setFontSize(12);
     doc.text(item.summary || "", 10, 40, { maxWidth: 180 });
-    doc.save(`Report_${item.title}.pdf`);
+    doc.save(`Report.pdf`);
   };
 
   if (!user) {
     return (
       <div style={styles.loginOverlay}>
         <div style={styles.loginCard}>
-          <h2 style={{ color: '#2c3e50' }}>Intelligence System Login</h2>
+          <h2 style={{ color: '#2c3e50' }}>Intelligence Login</h2>
           <form onSubmit={handleLogin} style={styles.vStack}>
             <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} style={styles.input} required />
             <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} style={styles.input} required />
@@ -157,7 +159,7 @@ function App() {
       </header>
       <main style={{ marginTop: '30px' }}>
         <div style={styles.searchSection}>
-          <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="Topic..." style={{ ...styles.input, flex: 1 }} />
+          <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="Enter topic..." style={{ ...styles.input, flex: 1 }} />
           <button onClick={startAnalysis} style={styles.mainBtn}>START ANALYSIS</button>
         </div>
         {statusMsg && <div style={isFinished ? styles.doneBanner : styles.infoBanner}>{statusMsg}</div>}
@@ -181,7 +183,6 @@ function App() {
   );
 }
 
-// --- Styles ---
 const styles: { [key: string]: React.CSSProperties } = {
   pageContainer: { maxWidth: '1000px', margin: '0 auto', padding: '20px', fontFamily: 'sans-serif' },
   navBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #333', paddingBottom: '10px' },
