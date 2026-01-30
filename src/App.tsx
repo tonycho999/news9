@@ -21,6 +21,7 @@ function App() {
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
   const [isFinished, setIsFinished] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
+  const [isLoadingKeys, setIsLoadingKeys] = useState(false); // 키 로딩 상태 추가
 
   const isAdmin = user?.email === 'admin@test.com';
 
@@ -28,23 +29,26 @@ function App() {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
+        setIsLoadingKeys(true);
         try {
-          // Firestore에서 유저 문서를 가져올 때 예외 처리를 강화함
+          // 유저 UID를 기반으로 문서 조회
           const userDocRef = doc(db, "users", currentUser.uid);
           const userDoc = await getDoc(userDocRef);
           
           if (userDoc.exists()) {
             const data = userDoc.data();
+            console.log("Key Sync Successful:", data.newsKey); // 브라우저 콘솔 확인용
             setUserKeys({
               newsKey: data.newsKey || "",
               geminiKey: data.geminiKey || ""
             });
-            console.log("System: API Credentials successfully synchronized.");
           } else {
-            console.error("System Error: No Firestore document found for UID:", currentUser.uid);
+            console.error("No document found in Firestore for UID:", currentUser.uid);
           }
         } catch (error) {
-          console.error("Firestore Access Error: Check Security Rules.", error);
+          console.error("Firestore error:", error);
+        } finally {
+          setIsLoadingKeys(false);
         }
       } else {
         setUserKeys(null);
@@ -62,23 +66,18 @@ function App() {
     try {
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error) {
-      alert("Login Failed. Please check your credentials.");
+      alert("Login Failed. Check credentials.");
     }
   };
 
-  // --- [GNews & Gemini API 연동 및 로딩 검증 로직] ---
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
     
-    // 2단계 보강: 키 로딩 상태에 따른 상세 안내
-    if (!userKeys) {
-      return alert("The system is still synchronizing your credentials. Please wait 3-5 seconds and try again.");
-    }
-    if (!userKeys.newsKey) {
-      return alert("Critical Error: 'newsKey' is missing in your database profile. Please contact the administrator.");
-    }
-    if (!userKeys.geminiKey) {
-      return alert("Critical Error: 'geminiKey' is missing in your database profile. Please contact the administrator.");
+    // 로딩 중이거나 키가 없는 경우에 대한 상세 처리
+    if (isLoadingKeys) return alert("System is still syncing your API profile. Wait 2 seconds.");
+    if (!userKeys || !userKeys.newsKey) {
+      console.log("Current userKeys State:", userKeys);
+      return alert("Critical Error: 'newsKey' not detected in your profile. Please re-login.");
     }
 
     setIsFinished(false);
@@ -86,14 +85,13 @@ function App() {
     
     try {
       setStatusMsg(`Accessing GNews Database for "${keyword}"...`);
-      // GNews API 연동 (기자님 DB 필드명 newsKey 사용)
       const newsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${userKeys.newsKey}`;
       
       const newsResponse = await fetch(newsUrl);
       const newsData = await newsResponse.json();
 
       if (!newsData.articles || newsData.articles.length === 0) {
-        throw new Error("No intelligence data found for this keyword in Philippine sources.");
+        throw new Error("No news found. Try another keyword.");
       }
 
       const realArticles: NewsItem[] = newsData.articles.map((art: any) => ({
@@ -104,47 +102,40 @@ function App() {
       setNewsList(realArticles);
 
       for (let i = 0; i < realArticles.length; i++) {
-        setStatusMsg(`Gemini AI analyzing intelligence source ${i + 1} of ${realArticles.length}...`);
+        setStatusMsg(`Gemini AI analyzing article ${i + 1} of ${realArticles.length}...`);
         
-        // Gemini API 연동 (기자님 DB 필드명 geminiKey 사용)
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${userKeys.geminiKey}`;
         
         const geminiResponse = await fetch(geminiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [{
-              parts: [{ text: `Summarize this news article for a professional reporter in 3-4 concise sentences: ${realArticles[i].title}` }]
-            }]
+            contents: [{ parts: [{ text: `Summarize this news article for a professional reporter in 3 sentences: ${realArticles[i].title}` }] }]
           })
         });
 
         const geminiData = await geminiResponse.json();
-        const summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "AI analysis temporarily unavailable for this source.";
+        const summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Analysis unavailable.";
 
         setNewsList(prev => prev.map((item, idx) => 
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
         ));
-
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, 1500));
       }
 
       setIsFinished(true);
-      setStatusMsg('Deep intelligence gathering and AI analysis complete.');
+      setStatusMsg('Intelligence analysis complete.');
 
     } catch (error: any) {
-      console.error(error);
       setStatusMsg(`System Alert: ${error.message}`);
     }
   };
 
   const savePDF = (item: NewsItem) => {
     const doc = new jsPDF();
-    doc.setFontSize(16);
     doc.text(item.title, 10, 20);
-    doc.setFontSize(12);
     doc.text(item.summary || "", 10, 40, { maxWidth: 180 });
-    doc.save(`Intel_Report.pdf`);
+    doc.save(`Intel.pdf`);
   };
 
   if (!user) {
@@ -174,7 +165,7 @@ function App() {
       </header>
       <main style={{ marginTop: '30px' }}>
         <div style={styles.searchSection}>
-          <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="Enter topic..." style={{ ...styles.input, flex: 1 }} />
+          <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="Topic..." style={{ ...styles.input, flex: 1 }} />
           <button onClick={startAnalysis} style={styles.mainBtn}>START ANALYSIS</button>
         </div>
         {statusMsg && <div style={isFinished ? styles.doneBanner : styles.infoBanner}>{statusMsg}</div>}
@@ -182,7 +173,7 @@ function App() {
           {newsList.map((news, index) => (
             <div key={index} style={styles.reportCard}>
               <h4>{news.title}</h4>
-              {news.isAnalyzing ? <div>⌛ AI Analyzing...</div> : 
+              {news.isAnalyzing ? <div>⌛ Analyzing...</div> : 
               <>
                 <p style={styles.summaryTxt}>{news.summary}</p>
                 <div style={{ display: 'flex', gap: '10px' }}>
