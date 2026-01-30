@@ -28,14 +28,23 @@ function App() {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
-        // [수정] 기자님이 보여주신 실제 DB 필드명과 1:1 매칭
-        const userDoc = await getDoc(doc(db, "users", currentUser.uid));
-        if (userDoc.exists()) {
-          const data = userDoc.data();
-          setUserKeys({
-            newsKey: data.newsKey || "",   // DB의 newsKey 필드 읽기
-            geminiKey: data.geminiKey || "" // DB의 geminiKey 필드 읽기
-          });
+        try {
+          // Firestore에서 유저 문서를 가져올 때 예외 처리를 강화함
+          const userDocRef = doc(db, "users", currentUser.uid);
+          const userDoc = await getDoc(userDocRef);
+          
+          if (userDoc.exists()) {
+            const data = userDoc.data();
+            setUserKeys({
+              newsKey: data.newsKey || "",
+              geminiKey: data.geminiKey || ""
+            });
+            console.log("System: API Credentials successfully synchronized.");
+          } else {
+            console.error("System Error: No Firestore document found for UID:", currentUser.uid);
+          }
+        } catch (error) {
+          console.error("Firestore Access Error: Check Security Rules.", error);
         }
       } else {
         setUserKeys(null);
@@ -57,30 +66,34 @@ function App() {
     }
   };
 
+  // --- [GNews & Gemini API 연동 및 로딩 검증 로직] ---
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
     
-    // [검증] 데이터가 정상적으로 로드되었는지 확인
-    if (!userKeys || !userKeys.newsKey) {
-      return alert("News API Key (newsKey) not loaded. Please refresh or check DB.");
+    // 2단계 보강: 키 로딩 상태에 따른 상세 안내
+    if (!userKeys) {
+      return alert("The system is still synchronizing your credentials. Please wait 3-5 seconds and try again.");
+    }
+    if (!userKeys.newsKey) {
+      return alert("Critical Error: 'newsKey' is missing in your database profile. Please contact the administrator.");
     }
     if (!userKeys.geminiKey) {
-      return alert("Gemini API Key (geminiKey) not loaded. Please check DB.");
+      return alert("Critical Error: 'geminiKey' is missing in your database profile. Please contact the administrator.");
     }
 
     setIsFinished(false);
     setNewsList([]); 
     
     try {
-      setStatusMsg(`Searching Philippine news for "${keyword}"...`);
-      // GNews API 연동 (newsKey 사용)
+      setStatusMsg(`Accessing GNews Database for "${keyword}"...`);
+      // GNews API 연동 (기자님 DB 필드명 newsKey 사용)
       const newsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${userKeys.newsKey}`;
       
       const newsResponse = await fetch(newsUrl);
       const newsData = await newsResponse.json();
 
       if (!newsData.articles || newsData.articles.length === 0) {
-        throw new Error("No news found. Try another keyword.");
+        throw new Error("No intelligence data found for this keyword in Philippine sources.");
       }
 
       const realArticles: NewsItem[] = newsData.articles.map((art: any) => ({
@@ -91,9 +104,9 @@ function App() {
       setNewsList(realArticles);
 
       for (let i = 0; i < realArticles.length; i++) {
-        setStatusMsg(`Gemini AI analyzing article ${i + 1} of ${realArticles.length}...`);
+        setStatusMsg(`Gemini AI analyzing intelligence source ${i + 1} of ${realArticles.length}...`);
         
-        // Gemini API 연동 (geminiKey 사용)
+        // Gemini API 연동 (기자님 DB 필드명 geminiKey 사용)
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${userKeys.geminiKey}`;
         
         const geminiResponse = await fetch(geminiUrl, {
@@ -107,7 +120,7 @@ function App() {
         });
 
         const geminiData = await geminiResponse.json();
-        const summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Deep analysis unavailable.";
+        const summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "AI analysis temporarily unavailable for this source.";
 
         setNewsList(prev => prev.map((item, idx) => 
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
@@ -117,7 +130,7 @@ function App() {
       }
 
       setIsFinished(true);
-      setStatusMsg('Intelligence analysis complete.');
+      setStatusMsg('Deep intelligence gathering and AI analysis complete.');
 
     } catch (error: any) {
       console.error(error);
@@ -127,9 +140,11 @@ function App() {
 
   const savePDF = (item: NewsItem) => {
     const doc = new jsPDF();
+    doc.setFontSize(16);
     doc.text(item.title, 10, 20);
+    doc.setFontSize(12);
     doc.text(item.summary || "", 10, 40, { maxWidth: 180 });
-    doc.save(`Report.pdf`);
+    doc.save(`Intel_Report.pdf`);
   };
 
   if (!user) {
@@ -167,7 +182,7 @@ function App() {
           {newsList.map((news, index) => (
             <div key={index} style={styles.reportCard}>
               <h4>{news.title}</h4>
-              {news.isAnalyzing ? <div>⌛ Analyzing...</div> : 
+              {news.isAnalyzing ? <div>⌛ AI Analyzing...</div> : 
               <>
                 <p style={styles.summaryTxt}>{news.summary}</p>
                 <div style={{ display: 'flex', gap: '10px' }}>
