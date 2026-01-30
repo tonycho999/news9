@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db } from './firebase'; 
 import { onAuthStateChanged, signOut, signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore'; 
+import { doc, getDoc, collection, getDocs } from 'firebase/firestore'; 
 import jsPDF from 'jspdf';
 import Signup from './Signup';
 
@@ -29,32 +29,27 @@ function App() {
       setUser(currentUser);
       if (currentUser) {
         try {
-          // 1단계: UID로 문서 찾기 시도
-          let userDocRef = doc(db, "users", currentUser.uid);
-          let userDoc = await getDoc(userDocRef);
+          // 1. 가장 먼저 UID로 직접 접근 시도
+          const userDoc = await getDoc(doc(db, "users", currentUser.uid));
           
-          // 2단계: UID로 못 찾을 경우, 이메일 주소로 검색 (이름 불일치 대비)
-          if (!userDoc.exists()) {
-            console.warn("UID doc not found, searching by email field...");
-            const q = query(collection(db, "users"), where("email", "==", currentUser.email));
-            const querySnapshot = await getDocs(q);
-            if (!querySnapshot.empty) {
-              const data = querySnapshot.docs[0].data();
-              setUserKeys({
-                newsKey: data.newsKey || "",
-                geminiKey: data.geminiKey || ""
-              });
-              return;
-            }
-          } else {
+          if (userDoc.exists()) {
             const data = userDoc.data();
-            setUserKeys({
-              newsKey: data.newsKey || "",
-              geminiKey: data.geminiKey || ""
+            setUserKeys({ newsKey: data.newsKey || "", geminiKey: data.geminiKey || "" });
+          } else {
+            // 2. UID로 없을 경우, users 컬렉션 전체를 뒤져서 이메일 매칭 (이름 불일치 해결)
+            const querySnapshot = await getDocs(collection(db, "users"));
+            let found = false;
+            querySnapshot.forEach((doc) => {
+              const data = doc.data();
+              if (data.email === currentUser.email) {
+                setUserKeys({ newsKey: data.newsKey || "", geminiKey: data.geminiKey || "" });
+                found = true;
+              }
             });
+            if (!found) console.error("No matching email found in users collection.");
           }
         } catch (error) {
-          console.error("Firestore loading error:", error);
+          console.error("DB Sync Error:", error);
         }
       } else {
         setUserKeys(null);
@@ -72,31 +67,30 @@ function App() {
     try {
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error) {
-      alert("Login Failed. Please check your credentials.");
+      alert("Login Failed.");
     }
   };
 
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
     
-    // 키가 로드되지 않았을 경우 강제 새로고침 유도
+    // 키가 여전히 없을 경우를 위한 상세 안내
     if (!userKeys || !userKeys.newsKey) {
-      console.log("Current State of userKeys:", userKeys);
-      return alert("API Key sync failed. Please log out and log in again to refresh your profile.");
+      return alert("Profile Syncing... Please wait 5 seconds and click again. If it fails, check if 'newsKey' field exists in Firestore.");
     }
 
     setIsFinished(false);
     setNewsList([]); 
     
     try {
-      setStatusMsg(`Searching GNews for "${keyword}"...`);
+      setStatusMsg(`Connecting to GNews for "${keyword}"...`);
       const newsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${userKeys.newsKey}`;
       
       const newsResponse = await fetch(newsUrl);
       const newsData = await newsResponse.json();
 
       if (!newsData.articles || newsData.articles.length === 0) {
-        throw new Error("No related news found on GNews.");
+        throw new Error("No news found.");
       }
 
       const realArticles: NewsItem[] = newsData.articles.map((art: any) => ({
@@ -125,7 +119,7 @@ function App() {
         setNewsList(prev => prev.map((item, idx) => 
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
         ));
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, 1500));
       }
 
       setIsFinished(true);
