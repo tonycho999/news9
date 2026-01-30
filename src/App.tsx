@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db } from './firebase'; 
 import { onAuthStateChanged, signOut, signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore'; 
+import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore'; 
 import jsPDF from 'jspdf';
 import Signup from './Signup';
 
@@ -21,7 +21,6 @@ function App() {
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
   const [isFinished, setIsFinished] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
-  const [isLoadingKeys, setIsLoadingKeys] = useState(false); // 키 로딩 상태 추가
 
   const isAdmin = user?.email === 'admin@test.com';
 
@@ -29,26 +28,33 @@ function App() {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
-        setIsLoadingKeys(true);
         try {
-          // 유저 UID를 기반으로 문서 조회
-          const userDocRef = doc(db, "users", currentUser.uid);
-          const userDoc = await getDoc(userDocRef);
+          // 1단계: UID로 문서 찾기 시도
+          let userDocRef = doc(db, "users", currentUser.uid);
+          let userDoc = await getDoc(userDocRef);
           
-          if (userDoc.exists()) {
+          // 2단계: UID로 못 찾을 경우, 이메일 주소로 검색 (이름 불일치 대비)
+          if (!userDoc.exists()) {
+            console.warn("UID doc not found, searching by email field...");
+            const q = query(collection(db, "users"), where("email", "==", currentUser.email));
+            const querySnapshot = await getDocs(q);
+            if (!querySnapshot.empty) {
+              const data = querySnapshot.docs[0].data();
+              setUserKeys({
+                newsKey: data.newsKey || "",
+                geminiKey: data.geminiKey || ""
+              });
+              return;
+            }
+          } else {
             const data = userDoc.data();
-            console.log("Key Sync Successful:", data.newsKey); // 브라우저 콘솔 확인용
             setUserKeys({
               newsKey: data.newsKey || "",
               geminiKey: data.geminiKey || ""
             });
-          } else {
-            console.error("No document found in Firestore for UID:", currentUser.uid);
           }
         } catch (error) {
-          console.error("Firestore error:", error);
-        } finally {
-          setIsLoadingKeys(false);
+          console.error("Firestore loading error:", error);
         }
       } else {
         setUserKeys(null);
@@ -66,32 +72,31 @@ function App() {
     try {
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error) {
-      alert("Login Failed. Check credentials.");
+      alert("Login Failed. Please check your credentials.");
     }
   };
 
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
     
-    // 로딩 중이거나 키가 없는 경우에 대한 상세 처리
-    if (isLoadingKeys) return alert("System is still syncing your API profile. Wait 2 seconds.");
+    // 키가 로드되지 않았을 경우 강제 새로고침 유도
     if (!userKeys || !userKeys.newsKey) {
-      console.log("Current userKeys State:", userKeys);
-      return alert("Critical Error: 'newsKey' not detected in your profile. Please re-login.");
+      console.log("Current State of userKeys:", userKeys);
+      return alert("API Key sync failed. Please log out and log in again to refresh your profile.");
     }
 
     setIsFinished(false);
     setNewsList([]); 
     
     try {
-      setStatusMsg(`Accessing GNews Database for "${keyword}"...`);
+      setStatusMsg(`Searching GNews for "${keyword}"...`);
       const newsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${userKeys.newsKey}`;
       
       const newsResponse = await fetch(newsUrl);
       const newsData = await newsResponse.json();
 
       if (!newsData.articles || newsData.articles.length === 0) {
-        throw new Error("No news found. Try another keyword.");
+        throw new Error("No related news found on GNews.");
       }
 
       const realArticles: NewsItem[] = newsData.articles.map((art: any) => ({
@@ -110,7 +115,7 @@ function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: `Summarize this news article for a professional reporter in 3 sentences: ${realArticles[i].title}` }] }]
+            contents: [{ parts: [{ text: `Summarize this in 3 sentences: ${realArticles[i].title}` }] }]
           })
         });
 
@@ -120,11 +125,11 @@ function App() {
         setNewsList(prev => prev.map((item, idx) => 
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
         ));
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
       setIsFinished(true);
-      setStatusMsg('Intelligence analysis complete.');
+      setStatusMsg('Analysis Complete.');
 
     } catch (error: any) {
       setStatusMsg(`System Alert: ${error.message}`);
@@ -135,7 +140,7 @@ function App() {
     const doc = new jsPDF();
     doc.text(item.title, 10, 20);
     doc.text(item.summary || "", 10, 40, { maxWidth: 180 });
-    doc.save(`Intel.pdf`);
+    doc.save(`Report.pdf`);
   };
 
   if (!user) {
