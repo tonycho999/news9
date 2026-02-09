@@ -21,22 +21,20 @@ function App() {
   const [isFinished, setIsFinished] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   
-  // 상태로 키를 관리하지만, 실행 시점에 없으면 다시 찾습니다.
+  // 초기값 null 설정
   const [userKeys, setUserKeys] = useState<{ newsKey: string; geminiKey: string } | null>(null);
-
-  const isAdmin = user?.email === 'admin@test.com';
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      // 로그인 시점에도 한 번 시도 (실패해도 분석 시작 시 다시 하므로 괜찮음)
       if (currentUser) fetchKeys(currentUser);
     });
     return () => unsubscribe();
   }, []);
 
-  // 키 가져오기 전용 함수 (분리하여 재사용)
+  // 키 가져오기 함수 (안전장치 유지)
   const fetchKeys = async (currentUser: any) => {
+    if (!currentUser) return null; 
     try {
       // 1. UID로 검색
       const userDoc = await getDoc(doc(db, "users", currentUser.uid));
@@ -47,8 +45,7 @@ function App() {
         return keys;
       } 
       
-      // 2. UID 실패 시 전체 스캔 (느리지만 확실함)
-      console.log("UID lookup failed, scanning all users...");
+      // 2. 이메일로 검색
       const querySnapshot = await getDocs(collection(db, "users"));
       let foundKeys = null;
       querySnapshot.forEach((doc) => {
@@ -68,7 +65,30 @@ function App() {
     return null;
   };
 
+  // [라우팅 1] URL이 /signup 이면 가입 화면 표시
   if (window.location.pathname === '/signup') {
+    return <Signup />;
+  }
+
+  // [라우팅 2] 로그인 화면 표시 (유저가 없을 때)
+  if (!user) {
+    return (
+      <div style={styles.loginOverlay}>
+        <div style={styles.loginCard}>
+          <h2 style={{ color: '#2c3e50' }}>Intelligence Login</h2>
+          <form onSubmit={handleLogin} style={styles.vStack}>
+            <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} style={styles.input} required />
+            <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} style={styles.input} required />
+            <button type="submit" style={styles.mainBtn}>Sign In</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // [라우팅 3] 관리자(admin@test.com) 자동 리다이렉트 (핵심 수정)
+  // 관리자로 로그인하면 대시보드가 아닌 가입 페이지(Signup)를 즉시 보여줍니다.
+  if (user.email === 'admin@test.com') {
     return <Signup />;
   }
 
@@ -81,7 +101,7 @@ function App() {
     }
   };
 
-  // --- 핵심 수정: 버튼 클릭 시 모든 과정을 순차적으로 수행 (에러 방지) ---
+  // --- 핵심 기능: 키가 없으면 실행을 멈추는 철벽 로직 ---
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
     
@@ -89,22 +109,25 @@ function App() {
     setNewsList([]); 
 
     try {
-      // [1단계] API 키 확보 (가장 중요)
+      // [1단계] 키 확보
       let activeKeys = userKeys;
 
-      // 만약 로딩된 키가 없다면, 지금 즉시 DB를 뒤져서 찾아옴
       if (!activeKeys || !activeKeys.newsKey) {
-        setStatusMsg("Synchronizing user credentials from database... (Please wait)");
+        setStatusMsg("System: Retrying credential sync...");
         const fetched = await fetchKeys(user);
+        
         if (!fetched || !fetched.newsKey) {
-          throw new Error("Could not find API Keys for this account. Please contact admin.");
+          throw new Error("Critical Error: API Keys not found in database. Please contact admin.");
         }
         activeKeys = fetched;
       }
 
+      if (!activeKeys?.newsKey) {
+        throw new Error("Intelligence Error: API Key is missing.");
+      }
+
       // [2단계] GNews 검색
-      setStatusMsg(`Accessing GNews Database for "${keyword}"...`);
-      // 데이터 로딩 시각적 효과를 위해 1초 대기
+      setStatusMsg(`System: Searching GNews for "${keyword}"...`);
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       const newsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
@@ -124,7 +147,7 @@ function App() {
 
       // [3단계] Gemini 요약
       for (let i = 0; i < realArticles.length; i++) {
-        setStatusMsg(`Gemini AI analyzing article ${i + 1} of ${realArticles.length}...`);
+        setStatusMsg(`System: AI analyzing article ${i + 1} of ${realArticles.length}...`);
         
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${activeKeys.geminiKey}`;
         
@@ -143,12 +166,11 @@ function App() {
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
         ));
         
-        // 너무 빠르면 API 제한 걸릴 수 있으므로 천천히 진행 (기자님 요청 반영)
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
       setIsFinished(true);
-      setStatusMsg('Analysis Complete.');
+      setStatusMsg('System: Analysis Complete.');
 
     } catch (error: any) {
       console.error(error);
@@ -163,28 +185,13 @@ function App() {
     doc.save(`Report.pdf`);
   };
 
-  if (!user) {
-    return (
-      <div style={styles.loginOverlay}>
-        <div style={styles.loginCard}>
-          <h2 style={{ color: '#2c3e50' }}>Intelligence Login</h2>
-          <form onSubmit={handleLogin} style={styles.vStack}>
-            <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} style={styles.input} required />
-            <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} style={styles.input} required />
-            <button type="submit" style={styles.mainBtn}>Sign In</button>
-          </form>
-        </div>
-      </div>
-    );
-  }
-
+  // --- Main Dashboard View (일반 기자용) ---
   return (
     <div style={styles.pageContainer}>
       <header style={styles.navBar}>
         <h2 style={{ margin: 0 }}>PH NEWS INTEL</h2>
         <div style={styles.hStack}>
           <span>{user.email}</span>
-          {isAdmin && <button onClick={() => window.location.href = '/signup'} style={styles.adminBtn}>+ CREATE USER</button>}
           <button onClick={() => signOut(auth)} style={styles.logoutBtn}>Logout</button>
         </div>
       </header>
@@ -224,7 +231,6 @@ const styles: { [key: string]: React.CSSProperties } = {
   input: { padding: '10px', border: '1px solid #ccc', borderRadius: '4px' },
   mainBtn: { padding: '10px 20px', backgroundColor: '#2c3e50', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' },
   logoutBtn: { padding: '5px 10px', cursor: 'pointer' },
-  adminBtn: { padding: '5px 10px', backgroundColor: '#c0392b', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' },
   searchSection: { display: 'flex', gap: '10px', marginBottom: '20px' },
   infoBanner: { padding: '10px', backgroundColor: '#e1f5fe', marginBottom: '20px' },
   doneBanner: { padding: '10px', backgroundColor: '#e8f5e9', marginBottom: '20px' },
