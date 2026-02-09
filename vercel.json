@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/news-api",
+      "destination": "https://gnews.io/api/v4/search"
+    }
+  ]
+}
