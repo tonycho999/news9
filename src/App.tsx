@@ -5,8 +5,8 @@ import { doc, getDoc, collection, getDocs, updateDoc } from 'firebase/firestore'
 import jsPDF from 'jspdf';
 import Signup from './Signup';
 
-// [설정] 쿨다운 시간 설정 (여기서 숫자를 바꾸면 됩니다)
-const COOLDOWN_SECONDS = 120; // 2분
+// [설정 1] 쿨타임 10분 (600초)
+const COOLDOWN_SECONDS = 600; 
 
 interface NewsItem {
   title: string;
@@ -19,18 +19,20 @@ function App() {
   const [user, setUser] = useState<any>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  
+  // [설정 2] 날짜 선택 상태 (기본값: 오늘)
+  const getTodayString = () => new Date().toISOString().split('T')[0];
+  const [targetDate, setTargetDate] = useState(getTodayString());
+  
   const [keyword, setKeyword] = useState('');
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
   const [isFinished, setIsFinished] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [userKeys, setUserKeys] = useState<{ newsKey: string; geminiKey: string } | null>(null);
 
-  // 종합 요약 관련 상태
   const [showModal, setShowModal] = useState(false);
   const [finalReport, setFinalReport] = useState('');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
-
-  // 쿨다운 상태
   const [cooldown, setCooldown] = useState(0);
 
   useEffect(() => {
@@ -41,7 +43,7 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // [수정] 빌드 에러 해결: NodeJS.Timeout -> any 로 변경
+  // 쿨다운 타이머 & 탭 제목 업데이트 (백그라운드 확인용)
   useEffect(() => {
     let timer: any; 
     if (cooldown > 0) {
@@ -99,11 +101,9 @@ function App() {
         const cleanKey = newKey.trim();
         try {
             await updateDoc(doc(db, "users", user.uid), { geminiKey: cleanKey });
-            
             const currentKeys = userKeys || { newsKey: '', geminiKey: '' };
             const newKeys = { ...currentKeys, geminiKey: cleanKey };
             localStorage.setItem(`api_keys_${user.uid}`, JSON.stringify(newKeys));
-
             alert("✅ Key Updated! Reloading...");
             window.location.reload(); 
         } catch (e) {
@@ -145,9 +145,7 @@ function App() {
     if (!keyword) return alert("Please enter a topic.");
     if (cooldown > 0) return;
 
-    // 분석 시작 시 쿨다운 가동
     setCooldown(COOLDOWN_SECONDS);
-
     setIsFinished(false);
     setShowModal(false);
     setNewsList([]); 
@@ -168,15 +166,19 @@ function App() {
           if (!targetModel.startsWith('models/')) targetModel = `models/${targetModel}`;
       } catch (e) {}
 
-      setStatusMsg(`System: Searching GNews for "${keyword}"...`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      const newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
+      // [설정 2 적용] 날짜 필터링 적용 & max=100 설정
+      setStatusMsg(`System: Searching GNews for "${keyword}" on ${targetDate}...`);
+      
+      const fromDate = `${targetDate}T00:00:00Z`;
+      const toDate = `${targetDate}T23:59:59Z`;
+      
+      const newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=100&from=${fromDate}&to=${toDate}&token=${activeKeys.newsKey}`;
+      
       const newsResponse = await fetch(newsUrl);
       if (!newsResponse.ok) throw new Error(`GNews API Error: ${newsResponse.statusText}`);
       
       const newsData = await newsResponse.json();
-      if (!newsData.articles || newsData.articles.length === 0) throw new Error("No news found.");
+      if (!newsData.articles || newsData.articles.length === 0) throw new Error(`No news found on ${targetDate}.`);
 
       const realArticles: NewsItem[] = newsData.articles.map((art: any) => ({
         title: art.title,
@@ -185,15 +187,21 @@ function App() {
       }));
       setNewsList(realArticles);
 
+      // --- Gemini 분석 루프 ---
       for (let i = 0; i < realArticles.length; i++) {
         let attempts = 0;
         let success = false;
         let summaryText = "Analysis unavailable.";
+
+        // [설정 5] 백그라운드에서도 진행상황 알 수 있게 탭 제목 변경
+        document.title = `(${i + 1}/${realArticles.length}) Analyzing...`;
         setStatusMsg(`System: Analyzing article ${i + 1}/${realArticles.length}...`);
 
         while (attempts < 3 && !success) {
             try {
                 const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel}:generateContent?key=${activeKeys.geminiKey}`;
+                
+                // [설정 6] AI 분석 시간 충분히 기다림 (fetch는 기본적으로 완료될때까지 대기함)
                 const geminiResponse = await fetch(geminiUrl, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -202,8 +210,9 @@ function App() {
                   })
                 });
 
+                // 429 에러(너무 빠름) 발생 시 10초 대기 후 재시도
                 if (geminiResponse.status === 429) {
-                    setStatusMsg(`⚠️ Speed Limit. Cooling down for 10s...`);
+                    setStatusMsg(`⚠️ Rate Limit Hit. Cooling down for 10s...`);
                     await new Promise(resolve => setTimeout(resolve, 10000));
                     attempts++;
                     continue; 
@@ -217,40 +226,52 @@ function App() {
                             return;
                         }
                      }
+                     // 기타 에러는 그냥 무시하고 다음 시도
                      throw new Error("API Error");
                 }
 
                 const geminiData = await geminiResponse.json();
                 summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Analysis unavailable.";
                 success = true;
+
             } catch (error) {
                 attempts++;
-                if (attempts < 3) await new Promise(resolve => setTimeout(resolve, 2000));
+                if (attempts < 3) await new Promise(resolve => setTimeout(resolve, 3000));
             }
         }
+
         setNewsList(prev => prev.map((item, idx) => idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item));
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // [설정 6 적용] 랜덤 딜레이 (2초 ~ 5초 사이)
+        // 3번째부터 실패하는 이유인 '과속'을 방지하기 위함
+        const randomDelay = Math.floor(Math.random() * (5000 - 2000 + 1) + 2000);
+        await new Promise(resolve => setTimeout(resolve, randomDelay));
       }
 
+      document.title = "Analysis Complete!";
       setIsFinished(true);
       setStatusMsg('System: All Intelligence Gathered.');
+
     } catch (error: any) {
       console.error(error);
       setStatusMsg(`System Alert: ${error.message}`);
+      document.title = "Analysis Error";
     }
   };
 
   const generateDailyBriefing = async () => {
     setIsGeneratingReport(true);
-    setFinalReport("✍️ AI is writing the Executive Briefing... (Allow up to 60 seconds for deep analysis)");
+    // [설정 7] 최대 5분까지 대기 안내
+    setFinalReport("✍️ AI is writing the Executive Briefing... (Allow up to 5 minutes)");
     setShowModal(true);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000); 
+    // [설정 7] 5분(300초) 타임아웃 설정
+    const timeoutId = setTimeout(() => controller.abort(), 300000); 
 
     try {
         const allSummaries = newsList.map(n => `- ${n.title}: ${n.summary}`).join("\n");
-        const prompt = `Based on the following news summaries about "${keyword}", write a comprehensive executive briefing.
+        const prompt = `Based on the following news summaries about "${keyword}" on ${targetDate}, write a comprehensive executive briefing.
         Structure it with:
         1. Key Trends (What is happening overall?)
         2. Major Details (Important facts)
@@ -260,7 +281,6 @@ function App() {
         ${allSummaries}`;
 
         let targetModel = "models/gemini-1.5-flash"; 
-        
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel}:generateContent?key=${userKeys?.geminiKey}`;
         
         const response = await fetch(geminiUrl, {
@@ -284,7 +304,7 @@ function App() {
 
     } catch (e: any) {
         if (e.name === 'AbortError') {
-            setFinalReport("⚠️ Error: Generation timed out (exceeded 60 seconds). Please try again or reduce news volume.");
+            setFinalReport("⚠️ Error: Generation timed out (exceeded 5 minutes). Please try again.");
         } else {
             setFinalReport(`⚠️ Error generating report: ${e.message}`);
         }
@@ -296,13 +316,13 @@ function App() {
   const downloadFinalPDF = () => {
     const doc = new jsPDF();
     doc.setFontSize(16);
-    doc.text(`Daily Briefing: ${keyword}`, 10, 20);
+    doc.text(`Daily Briefing: ${keyword} (${targetDate})`, 10, 20);
     
     doc.setFontSize(11);
     const splitText = doc.splitTextToSize(finalReport, 180);
     doc.text(splitText, 10, 30);
     
-    doc.save(`${keyword}_Briefing.pdf`);
+    doc.save(`${keyword}_${targetDate}_Briefing.pdf`);
   };
 
   if (window.location.pathname === '/signup') return <Signup />;
@@ -335,6 +355,14 @@ function App() {
       </header>
       <main style={{ marginTop: '30px' }}>
         <div style={styles.searchSection}>
+          {/* [설정 1] 날짜 선택기 추가 */}
+          <input 
+            type="date" 
+            value={targetDate} 
+            max={getTodayString()} // 미래 날짜 선택 불가
+            onChange={(e) => setTargetDate(e.target.value)} 
+            style={styles.dateInput} 
+          />
           <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="Topic..." style={{ ...styles.input, flex: 1 }} />
           
           <button 
@@ -342,7 +370,7 @@ function App() {
             style={cooldown > 0 ? styles.disabledBtn : styles.mainBtn}
             disabled={cooldown > 0}
           >
-            {cooldown > 0 ? `WAIT ${cooldown}s` : "START ANALYSIS"}
+            {cooldown > 0 ? `WAIT ${Math.floor(cooldown / 60)}m ${cooldown % 60}s` : "START ANALYSIS"}
           </button>
         </div>
 
@@ -377,13 +405,13 @@ function App() {
           <div style={styles.modalOverlay}>
               <div style={styles.modalContent}>
                   <h3 style={{ borderBottom: '1px solid #ddd', paddingBottom: '10px' }}>
-                      📋 Executive Daily Briefing: {keyword}
+                      📋 Executive Daily Briefing: {keyword} ({targetDate})
                   </h3>
                   <div style={styles.reportBox}>
                     {isGeneratingReport ? (
                         <div style={{textAlign: 'center', marginTop: '20px'}}>
                             <p style={{fontSize: '18px', fontWeight: 'bold'}}>✍️ Generating Report...</p>
-                            <p style={{color: '#666'}}>Please wait up to 60 seconds.</p>
+                            <p style={{color: '#666'}}>Please wait up to 5 minutes for deep analysis.</p>
                         </div>
                     ) : finalReport}
                   </div>
@@ -410,6 +438,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   vStack: { display: 'flex', flexDirection: 'column', gap: '10px', width: '300px' },
   hStack: { display: 'flex', alignItems: 'center', gap: '10px' },
   input: { padding: '10px', border: '1px solid #ccc', borderRadius: '4px' },
+  dateInput: { padding: '10px', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer' },
   mainBtn: { padding: '10px 20px', backgroundColor: '#2c3e50', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', minWidth: '150px' },
   disabledBtn: { padding: '10px 20px', backgroundColor: '#95a5a6', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'not-allowed', minWidth: '150px' },
   logoutBtn: { padding: '5px 10px', cursor: 'pointer' },
