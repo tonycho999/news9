@@ -6,8 +6,7 @@ import jsPDF from 'jspdf';
 
 const COOLDOWN_SECONDS = 600; 
 
-// [수정] 비상용 키를 코드에 직접 내장 (하드코딩)
-const FALLBACK_GROQ_KEY = "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";
+// [변경] 하드코딩된 키 삭제됨. 이제 DB에서 가져옵니다.
 
 export interface NewsItem {
   title: string;
@@ -28,8 +27,8 @@ export function useNewsIntel() {
   const [isFinished, setIsFinished] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   
-  // fallbackKey는 이제 상태에서 관리 안 함 (상수 사용)
-  const [userKeys, setUserKeys] = useState<{ newsKey: string; geminiKey: string } | null>(null);
+  // [변경] fallbackKey가 포함된 상태 정의
+  const [userKeys, setUserKeys] = useState<{ newsKey: string; geminiKey: string; fallbackKey?: string } | null>(null);
   
   const [showModal, setShowModal] = useState(false);
   const [finalReport, setFinalReport] = useState('');
@@ -57,6 +56,7 @@ export function useNewsIntel() {
     const localKeyData = localStorage.getItem(`api_keys_${currentUser.uid}`);
     if (localKeyData) {
         const parsedKeys = JSON.parse(localKeyData);
+        // 로컬 스토리지에 fallbackKey가 있는지 확인
         if (parsedKeys.newsKey && parsedKeys.geminiKey) {
             setUserKeys(parsedKeys);
             return parsedKeys;
@@ -70,10 +70,13 @@ export function useNewsIntel() {
             const qs = await getDocs(collection(db, "users"));
             qs.forEach((doc) => { if (doc.data().email === currentUser.email) keys = doc.data(); });
         }
+        
         if (keys) {
+             // [변경] DB에서 fallbackKey도 같이 가져옴
              const mappedKeys = { 
                  newsKey: keys.newsKey || "", 
-                 geminiKey: keys.geminiKey || ""
+                 geminiKey: keys.geminiKey || "",
+                 fallbackKey: keys.fallbackKey || "" 
              };
              localStorage.setItem(`api_keys_${currentUser.uid}`, JSON.stringify(mappedKeys));
              setUserKeys(mappedKeys);
@@ -84,9 +87,7 @@ export function useNewsIntel() {
   };
 
   const manualUpdateKey = async () => {
-    // 이제 Gemini 키만 물어봅니다.
-    const newKey = prompt("🔑 Enter a NEW Gemini API Key from 'aistudio.google.com':");
-    
+    const newKey = prompt("🔑 Enter a NEW Gemini API Key:");
     if (newKey && user) {
         try {
             await updateDoc(doc(db, "users", user.uid), { geminiKey: newKey.trim() });
@@ -97,13 +98,11 @@ export function useNewsIntel() {
     }
   };
 
-  // 3.0 -> 2.5 -> 2.0 -> 1.5 순서로 모델 찾기
   const detectBestModel = async (apiKey: string) => {
     setStatusMsg("System: Connecting to AI Core..."); 
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
       const data = await response.json();
-      
       if (!data.models) throw new Error("List failed");
 
       const capableModels = data.models.filter((m: any) => 
@@ -123,17 +122,19 @@ export function useNewsIntel() {
       return bestModel.name;
 
     } catch (e) {
-      console.warn("Model detection failed, defaulting to 1.5 flash.");
       return "models/gemini-1.5-flash"; 
     }
   };
 
-  // [수정] 내장된 FALLBACK_GROQ_KEY 사용
-  const callFallbackAI = async (title: string) => {
+  // [수정] DB에서 가져온 키를 인자로 받도록 변경
+  const callFallbackAI = async (title: string, fallbackKey: string) => {
+      // Groq 모델명 최신화 (안정성)
+      const targetModel = "mixtral-8x7b-32768"; 
+      
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
           headers: {
-              "Authorization": `Bearer ${FALLBACK_GROQ_KEY}`, // 하드코딩된 키 사용
+              "Authorization": `Bearer ${fallbackKey}`, // DB에서 가져온 키 사용
               "Content-Type": "application/json"
           },
           body: JSON.stringify({
@@ -141,13 +142,17 @@ export function useNewsIntel() {
                   role: "user",
                   content: `Summarize this news title in 3 sentences: "${title}"`
               }],
-              model: "llama3-8b-8192" 
+              model: targetModel
           })
       });
       
-      if (!response.ok) throw new Error("Fallback AI Failed");
+      if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(`Groq Error ${response.status}: ${errData.error?.message}`);
+      }
+      
       const data = await response.json();
-      return data.choices[0]?.message?.content || "Fallback Error";
+      return data.choices[0]?.message?.content || "Fallback returned empty.";
   };
 
   const startAnalysis = async () => {
@@ -158,14 +163,13 @@ export function useNewsIntel() {
 
     try {
       let activeKeys = userKeys;
+      // 키가 없으면 DB에서 다시 당겨옴
       if (!activeKeys?.newsKey) activeKeys = await fetchKeys(user);
       if (!activeKeys?.newsKey) throw new Error("API Keys missing.");
 
-      // 1. 모델 감지
       const foundModel = await detectBestModel(activeKeys.geminiKey);
       setActiveModelName(foundModel);
 
-      // 2. 뉴스 검색
       setStatusMsg(`System: Searching GNews for "${keyword}"...`);
       const fromDate = `${targetDate}T00:00:00+08:00`;
       const toDate = `${targetDate}T23:59:59+08:00`;
@@ -175,7 +179,6 @@ export function useNewsIntel() {
       let newsData = await newsRes.json();
       
       if (!newsData.articles?.length) {
-           console.warn("Retry without date...");
            setStatusMsg(`System: Searching LATEST news...`);
            newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
            newsRes = await fetch(newsUrl);
@@ -187,7 +190,6 @@ export function useNewsIntel() {
       const articles = newsData.articles.map((art:any) => ({ title: art.title, link: art.url, isAnalyzing: true }));
       setNewsList(articles);
 
-      // 3. 분석 루프
       for (let i = 0; i < articles.length; i++) {
         let success = false; 
         let summary = "Initializing...";
@@ -195,7 +197,7 @@ export function useNewsIntel() {
         setStatusMsg(`Analyzing article ${i+1}/${articles.length}...`);
         document.title = `(${i+1}/${articles.length}) Analyzing...`;
         
-        // Gemini 시도 (최대 2회)
+        // 1. Gemini 시도
         for (let attempts = 0; attempts < 2 && !success; attempts++) {
              try {
                  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/${foundModel}:generateContent?key=${activeKeys.geminiKey}`, {
@@ -222,21 +224,25 @@ export function useNewsIntel() {
                      throw new Error(`Gemini Error ${res.status}`);
                  }
              } catch(e) { 
-                 console.warn("Gemini Failed, retrying...", e);
-                 await new Promise(r => setTimeout(r, 2000));
+                 await new Promise(r => setTimeout(r, 1500));
              }
         }
 
-        // Gemini 실패 시 -> 하드코딩된 Fallback AI 투입
+        // 2. Gemini 실패 시 -> Fallback (Groq) 투입 (DB 키 사용)
         if (!success) {
-            try {
-                console.log("⚠️ Switching to Fallback AI...");
-                // 여기서 내장된 키를 자동으로 사용
-                summary = await callFallbackAI(articles[i].title);
-                success = true;
-            } catch (fallbackError) {
-                console.error("Fallback Failed:", fallbackError);
-                summary = "Analysis Unavailable (Both AIs Failed)";
+            // [중요] DB에 fallbackKey가 있을 때만 실행
+            if (activeKeys.fallbackKey) {
+                try {
+                    console.log("⚠️ Switching to Fallback AI...");
+                    summary = await callFallbackAI(articles[i].title, activeKeys.fallbackKey);
+                    success = true;
+                } catch (fallbackError: any) {
+                    console.error("Fallback Failed:", fallbackError);
+                    summary = `[System Failure] Gemini & Backup AI both failed.`;
+                }
+            } else {
+                // DB에 키가 없으면
+                summary = "Analysis Unavailable (Gemini Failed & No Backup Key in DB)";
             }
         }
         
@@ -256,7 +262,6 @@ export function useNewsIntel() {
     try {
         const prompt = `Act as an executive editor. Based on these summaries, write a briefing:\n${newsList.map(n => n.title + ": " + n.summary).join('\n')}`;
         
-        // 브리핑도 Gemini 우선, 실패시 처리 로직은 복잡해지니 일단 Gemini만 사용
         const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/${activeModelName}:generateContent?key=${userKeys?.geminiKey}`, {
             method: 'POST', 
             headers: {'Content-Type': 'application/json'},
