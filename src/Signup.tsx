@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { auth } from './firebase';
+import { auth, db } from './firebase'; // db 추가
 import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { doc, setDoc } from 'firebase/firestore'; // Firestore 저장 함수 추가
 
 function Signup() {
   const [formData, setFormData] = useState({
@@ -24,13 +25,30 @@ function Signup() {
     }
 
     try {
-      // Firebase 계정 생성
-      await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      // 1. Firebase 인증 계정 생성 (로그인용)
+      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      const user = userCredential.user;
       
-      // 가입 성공 시 알림 (실제 운영 시에는 여기서 Firestore 등에 API Key를 저장합니다)
-      alert(`User ${formData.username} created successfully! API Keys have been registered.`);
+      console.log("Auth Account Created:", user.uid);
+
+      // 2. Firestore 데이터베이스에 유저 정보 및 API Key 저장 (필수 단계)
+      // App.tsx가 읽어갈 수 있도록 필드명을 newsKey, geminiKey로 매핑하여 저장합니다.
+      await setDoc(doc(db, "users", user.uid), {
+        username: formData.username,
+        email: formData.email,
+        newsKey: formData.apiKey1,   // apiKey1 입력값을 newsKey로 저장
+        geminiKey: formData.apiKey2, // apiKey2 입력값을 geminiKey로 저장
+        createdAt: new Date().toISOString(),
+        role: 'reporter'
+      });
+
+      alert(`User ${formData.username} created successfully! API Keys are saved to database.`);
+      
+      // 가입 성공 시 메인 화면으로 이동 (자동 로그인 됨)
       window.location.href = '/';
+
     } catch (error: any) {
+      console.error("Signup Error:", error);
       alert("Error creating account: " + error.message);
     }
   };
@@ -60,10 +78,10 @@ function Signup() {
           <hr style={{ margin: '20px 0', border: '0.5px solid #eee' }} />
 
           <label style={styles.label}>Intelligence API Key 1 (News Access)</label>
-          <input name="apiKey1" placeholder="Enter API Key 1" onChange={handleChange} style={styles.input} required />
+          <input name="apiKey1" placeholder="Enter GNews Key" onChange={handleChange} style={styles.input} required />
 
           <label style={styles.label}>Intelligence API Key 2 (AI Analysis)</label>
-          <input name="apiKey2" placeholder="Enter API Key 2" onChange={handleChange} style={styles.input} required />
+          <input name="apiKey2" placeholder="Enter Gemini Key" onChange={handleChange} style={styles.input} required />
 
           <button type="submit" style={styles.submitBtn}>REGISTER ACCOUNT</button>
           <button type="button" onClick={() => window.location.href = '/'} style={styles.cancelBtn}>CANCEL</button>
