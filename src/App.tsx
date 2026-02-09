@@ -14,49 +14,59 @@ interface NewsItem {
 
 function App() {
   const [user, setUser] = useState<any>(null);
-  const [userKeys, setUserKeys] = useState<{ newsKey: string; geminiKey: string } | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [keyword, setKeyword] = useState('');
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
   const [isFinished, setIsFinished] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
+  
+  // 상태로 키를 관리하지만, 실행 시점에 없으면 다시 찾습니다.
+  const [userKeys, setUserKeys] = useState<{ newsKey: string; geminiKey: string } | null>(null);
 
   const isAdmin = user?.email === 'admin@test.com';
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      if (currentUser) {
-        try {
-          // 1. 가장 먼저 UID로 직접 접근 시도
-          const userDoc = await getDoc(doc(db, "users", currentUser.uid));
-          
-          if (userDoc.exists()) {
-            const data = userDoc.data();
-            setUserKeys({ newsKey: data.newsKey || "", geminiKey: data.geminiKey || "" });
-          } else {
-            // 2. UID로 없을 경우, users 컬렉션 전체를 뒤져서 이메일 매칭 (이름 불일치 해결)
-            const querySnapshot = await getDocs(collection(db, "users"));
-            let found = false;
-            querySnapshot.forEach((doc) => {
-              const data = doc.data();
-              if (data.email === currentUser.email) {
-                setUserKeys({ newsKey: data.newsKey || "", geminiKey: data.geminiKey || "" });
-                found = true;
-              }
-            });
-            if (!found) console.error("No matching email found in users collection.");
-          }
-        } catch (error) {
-          console.error("DB Sync Error:", error);
-        }
-      } else {
-        setUserKeys(null);
-      }
+      // 로그인 시점에도 한 번 시도 (실패해도 분석 시작 시 다시 하므로 괜찮음)
+      if (currentUser) fetchKeys(currentUser);
     });
     return () => unsubscribe();
   }, []);
+
+  // 키 가져오기 전용 함수 (분리하여 재사용)
+  const fetchKeys = async (currentUser: any) => {
+    try {
+      // 1. UID로 검색
+      const userDoc = await getDoc(doc(db, "users", currentUser.uid));
+      if (userDoc.exists()) {
+        const data = userDoc.data();
+        const keys = { newsKey: data.newsKey || "", geminiKey: data.geminiKey || "" };
+        setUserKeys(keys);
+        return keys;
+      } 
+      
+      // 2. UID 실패 시 전체 스캔 (느리지만 확실함)
+      console.log("UID lookup failed, scanning all users...");
+      const querySnapshot = await getDocs(collection(db, "users"));
+      let foundKeys = null;
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.email === currentUser.email) {
+          foundKeys = { newsKey: data.newsKey || "", geminiKey: data.geminiKey || "" };
+        }
+      });
+      
+      if (foundKeys) {
+        setUserKeys(foundKeys);
+        return foundKeys;
+      }
+    } catch (error) {
+      console.error("Key fetch error:", error);
+    }
+    return null;
+  };
 
   if (window.location.pathname === '/signup') {
     return <Signup />;
@@ -71,26 +81,38 @@ function App() {
     }
   };
 
+  // --- 핵심 수정: 버튼 클릭 시 모든 과정을 순차적으로 수행 (에러 방지) ---
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
     
-    // 키가 여전히 없을 경우를 위한 상세 안내
-    if (!userKeys || !userKeys.newsKey) {
-      return alert("Profile Syncing... Please wait 5 seconds and click again. If it fails, check if 'newsKey' field exists in Firestore.");
-    }
-
     setIsFinished(false);
     setNewsList([]); 
-    
+
     try {
-      setStatusMsg(`Connecting to GNews for "${keyword}"...`);
-      const newsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${userKeys.newsKey}`;
-      
+      // [1단계] API 키 확보 (가장 중요)
+      let activeKeys = userKeys;
+
+      // 만약 로딩된 키가 없다면, 지금 즉시 DB를 뒤져서 찾아옴
+      if (!activeKeys || !activeKeys.newsKey) {
+        setStatusMsg("Synchronizing user credentials from database... (Please wait)");
+        const fetched = await fetchKeys(user);
+        if (!fetched || !fetched.newsKey) {
+          throw new Error("Could not find API Keys for this account. Please contact admin.");
+        }
+        activeKeys = fetched;
+      }
+
+      // [2단계] GNews 검색
+      setStatusMsg(`Accessing GNews Database for "${keyword}"...`);
+      // 데이터 로딩 시각적 효과를 위해 1초 대기
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      const newsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
       const newsResponse = await fetch(newsUrl);
       const newsData = await newsResponse.json();
 
       if (!newsData.articles || newsData.articles.length === 0) {
-        throw new Error("No news found.");
+        throw new Error("No news found for this keyword.");
       }
 
       const realArticles: NewsItem[] = newsData.articles.map((art: any) => ({
@@ -100,16 +122,17 @@ function App() {
       }));
       setNewsList(realArticles);
 
+      // [3단계] Gemini 요약
       for (let i = 0; i < realArticles.length; i++) {
         setStatusMsg(`Gemini AI analyzing article ${i + 1} of ${realArticles.length}...`);
         
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${userKeys.geminiKey}`;
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${activeKeys.geminiKey}`;
         
         const geminiResponse = await fetch(geminiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: `Summarize this in 3 sentences: ${realArticles[i].title}` }] }]
+            contents: [{ parts: [{ text: `Summarize this news article for a professional reporter in 3 sentences: ${realArticles[i].title}` }] }]
           })
         });
 
@@ -119,13 +142,16 @@ function App() {
         setNewsList(prev => prev.map((item, idx) => 
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
         ));
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        
+        // 너무 빠르면 API 제한 걸릴 수 있으므로 천천히 진행 (기자님 요청 반영)
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
       setIsFinished(true);
       setStatusMsg('Analysis Complete.');
 
     } catch (error: any) {
+      console.error(error);
       setStatusMsg(`System Alert: ${error.message}`);
     }
   };
