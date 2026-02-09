@@ -43,7 +43,7 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // 쿨다운 타이머 & 탭 제목 업데이트 (백그라운드 확인용)
+  // 쿨다운 타이머
   useEffect(() => {
     let timer: any; 
     if (cooldown > 0) {
@@ -145,7 +145,9 @@ function App() {
     if (!keyword) return alert("Please enter a topic.");
     if (cooldown > 0) return;
 
+    // 일단 쿨타임 시작 (성공할 거라 가정)
     setCooldown(COOLDOWN_SECONDS);
+    
     setIsFinished(false);
     setShowModal(false);
     setNewsList([]); 
@@ -166,7 +168,6 @@ function App() {
           if (!targetModel.startsWith('models/')) targetModel = `models/${targetModel}`;
       } catch (e) {}
 
-      // [설정 2 적용] 날짜 필터링 적용 & max=100 설정
       setStatusMsg(`System: Searching GNews for "${keyword}" on ${targetDate}...`);
       
       const fromDate = `${targetDate}T00:00:00Z`;
@@ -178,7 +179,12 @@ function App() {
       if (!newsResponse.ok) throw new Error(`GNews API Error: ${newsResponse.statusText}`);
       
       const newsData = await newsResponse.json();
-      if (!newsData.articles || newsData.articles.length === 0) throw new Error(`No news found on ${targetDate}.`);
+      
+      // [핵심 수정] 뉴스가 없으면 쿨타임 즉시 해제 (0으로 초기화)
+      if (!newsData.articles || newsData.articles.length === 0) {
+        setCooldown(0); 
+        throw new Error(`No news found on ${targetDate}.`);
+      }
 
       const realArticles: NewsItem[] = newsData.articles.map((art: any) => ({
         title: art.title,
@@ -193,7 +199,6 @@ function App() {
         let success = false;
         let summaryText = "Analysis unavailable.";
 
-        // [설정 5] 백그라운드에서도 진행상황 알 수 있게 탭 제목 변경
         document.title = `(${i + 1}/${realArticles.length}) Analyzing...`;
         setStatusMsg(`System: Analyzing article ${i + 1}/${realArticles.length}...`);
 
@@ -201,7 +206,6 @@ function App() {
             try {
                 const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel}:generateContent?key=${activeKeys.geminiKey}`;
                 
-                // [설정 6] AI 분석 시간 충분히 기다림 (fetch는 기본적으로 완료될때까지 대기함)
                 const geminiResponse = await fetch(geminiUrl, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -210,7 +214,6 @@ function App() {
                   })
                 });
 
-                // 429 에러(너무 빠름) 발생 시 10초 대기 후 재시도
                 if (geminiResponse.status === 429) {
                     setStatusMsg(`⚠️ Rate Limit Hit. Cooling down for 10s...`);
                     await new Promise(resolve => setTimeout(resolve, 10000));
@@ -226,7 +229,6 @@ function App() {
                             return;
                         }
                      }
-                     // 기타 에러는 그냥 무시하고 다음 시도
                      throw new Error("API Error");
                 }
 
@@ -242,8 +244,6 @@ function App() {
 
         setNewsList(prev => prev.map((item, idx) => idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item));
         
-        // [설정 6 적용] 랜덤 딜레이 (2초 ~ 5초 사이)
-        // 3번째부터 실패하는 이유인 '과속'을 방지하기 위함
         const randomDelay = Math.floor(Math.random() * (5000 - 2000 + 1) + 2000);
         await new Promise(resolve => setTimeout(resolve, randomDelay));
       }
@@ -256,17 +256,16 @@ function App() {
       console.error(error);
       setStatusMsg(`System Alert: ${error.message}`);
       document.title = "Analysis Error";
+      // 참고: 에러가 나더라도 'No news'가 아닌 다른 에러면 쿨타임은 유지됨 (API 보호 목적)
     }
   };
 
   const generateDailyBriefing = async () => {
     setIsGeneratingReport(true);
-    // [설정 7] 최대 5분까지 대기 안내
     setFinalReport("✍️ AI is writing the Executive Briefing... (Allow up to 5 minutes)");
     setShowModal(true);
 
     const controller = new AbortController();
-    // [설정 7] 5분(300초) 타임아웃 설정
     const timeoutId = setTimeout(() => controller.abort(), 300000); 
 
     try {
@@ -355,11 +354,10 @@ function App() {
       </header>
       <main style={{ marginTop: '30px' }}>
         <div style={styles.searchSection}>
-          {/* [설정 1] 날짜 선택기 추가 */}
           <input 
             type="date" 
             value={targetDate} 
-            max={getTodayString()} // 미래 날짜 선택 불가
+            max={getTodayString()} 
             onChange={(e) => setTargetDate(e.target.value)} 
             style={styles.dateInput} 
           />
