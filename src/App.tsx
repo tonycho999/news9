@@ -60,20 +60,18 @@ function App() {
     return null;
   };
 
-  const updateGeminiKey = async () => {
-    // [중요] 키를 입력받을 때 공백 제거(trim) 처리
-    let newKey = prompt("⚠️ Gemini Key Issue.\n\nPlease paste a new API Key from 'aistudio.google.com':");
+  const manualUpdateKey = async () => {
+    const newKey = prompt("🔑 Enter a NEW Gemini API Key from 'aistudio.google.com':\n(Do NOT use the Firebase Key starting with same letters)");
     if (newKey && user) {
-        newKey = newKey.trim(); // 공백 제거
+        const cleanKey = newKey.trim();
         try {
             await updateDoc(doc(db, "users", user.uid), {
-                geminiKey: newKey
+                geminiKey: cleanKey
             });
-            alert("✅ Key Saved! The page will reload to apply changes.");
-            // [핵심 해결책] 강제 새로고침을 통해 메모리에 남은 '옛날 키'를 완전히 삭제함
+            alert("✅ Key Updated! Reloading...");
             window.location.reload(); 
         } catch (e) {
-            alert("Failed to update key in DB.");
+            alert("DB Update Failed.");
         }
     }
   };
@@ -87,6 +85,33 @@ function App() {
     }
   };
 
+  // [핵심 기능] 사용 가능한 모델을 스스로 찾아내는 함수
+  const findWorkingModel = async (apiKey: string) => {
+    try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+        const data = await response.json();
+        
+        if (!data.models) {
+            throw new Error(data.error?.message || "Invalid API Key");
+        }
+
+        // 'generateContent' 기능을 지원하는 모델 중 가장 최신 모델을 찾음
+        const viableModel = data.models.find((m: any) => 
+            m.supportedGenerationMethods?.includes("generateContent") &&
+            (m.name.includes("flash") || m.name.includes("pro"))
+        );
+
+        if (viableModel) {
+            console.log("✅ Auto-Detected Model:", viableModel.name);
+            return viableModel.name; // 예: 'models/gemini-1.5-flash'
+        }
+        return "models/gemini-pro"; // 못 찾으면 기본값
+    } catch (e) {
+        console.error("Model Detection Failed:", e);
+        throw e;
+    }
+  };
+
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
     
@@ -97,22 +122,41 @@ function App() {
       let activeKeys = userKeys;
 
       if (!activeKeys || !activeKeys.newsKey) {
-        setStatusMsg("System: Synchronizing credentials...");
+        setStatusMsg("System: Check Credentials...");
         const fetched = await fetchKeys(user);
         if (!fetched || !fetched.newsKey) {
-          throw new Error("Critical Error: API Keys not found.");
+            throw new Error("API Keys missing. Please use 'Change Keys' button.");
         }
         activeKeys = fetched;
       }
 
+      // [1단계] 사용 가능한 AI 모델 자동 감지
+      setStatusMsg("System: Auto-detecting best AI model...");
+      let targetModel = "models/gemini-1.5-flash"; // 기본값
+      try {
+          targetModel = await findWorkingModel(activeKeys.geminiKey);
+          // 모델명 앞에 'models/'가 없으면 붙여줌 (API 요구사항)
+          if (!targetModel.startsWith('models/')) {
+              targetModel = `models/${targetModel}`;
+          }
+      } catch (e: any) {
+          // 모델 목록조차 못 가져오면 키가 틀린 것임
+          if (window.confirm(`⚠️ API Key Error: ${e.message}\n\nUpdate Key?`)) {
+              manualUpdateKey();
+              return;
+          }
+      }
+
+      // [2단계] 뉴스 검색
       setStatusMsg(`System: Searching GNews for "${keyword}"...`);
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       const newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
       const newsResponse = await fetch(newsUrl);
+      
       if (!newsResponse.ok) throw new Error(`GNews API Error: ${newsResponse.statusText}`);
-
       const newsData = await newsResponse.json();
+      
       if (!newsData.articles || newsData.articles.length === 0) {
         throw new Error("No news found.");
       }
@@ -124,41 +168,34 @@ function App() {
       }));
       setNewsList(realArticles);
 
-      // Gemini 루프
+      // [3단계] Gemini 루프 (찾아낸 모델 사용)
       for (let i = 0; i < realArticles.length; i++) {
-        setStatusMsg(`System: Analyzing article ${i + 1} of ${realArticles.length}...`);
+        setStatusMsg(`System: Analyzing article ${i + 1} with ${targetModel.replace('models/', '')}...`);
         
-        // [수정] 모델명을 'gemini-1.5-flash-latest'로 변경 (가장 최신 버전 자동 매칭)
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${activeKeys.geminiKey}`;
+        // 자동 감지된 모델 URL 사용
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel}:generateContent?key=${activeKeys.geminiKey}`;
         
         const geminiResponse = await fetch(geminiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: `Act as a professional reporter. Summarize this news title in 3 sentences with context: "${realArticles[i].title}"` }] }]
+            contents: [{ parts: [{ text: `Summarize this news title in 3 sentences: "${realArticles[i].title}"` }] }]
           })
         });
 
-        // 에러 발생 시 처리
+        const geminiData = await geminiResponse.json();
+        
         if (geminiResponse.status !== 200) {
-            const errData = await geminiResponse.json();
-            console.error("Gemini Error:", errData);
-            
-            // 404(모델 없음)나 400(키 오류)일 경우 팝업 띄움
-            if (window.confirm(`Gemini Error: ${errData.error?.message}\n\nUpdate API Key?`)) {
-                await updateGeminiKey();
-                return; // 루프 즉시 종료
-            }
+             console.error("Gemini Error:", geminiData);
+             // 모델 감지 후에도 에러가 나면 내용 문제일 수 있음, 일단 진행
         }
 
-        const geminiData = await geminiResponse.json();
-        const summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Deep analysis unavailable.";
+        const summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Analysis unavailable (Content blocked or Error).";
 
         setNewsList(prev => prev.map((item, idx) => 
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
         ));
         
-        // 안전 대기 1초
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
 
@@ -203,6 +240,7 @@ function App() {
         <h2 style={{ margin: 0 }}>PH NEWS INTEL</h2>
         <div style={styles.hStack}>
           <span>{user.email}</span>
+          <button onClick={manualUpdateKey} style={styles.keyBtn}>🔑 Change Keys</button>
           <button onClick={() => signOut(auth)} style={styles.logoutBtn}>Logout</button>
         </div>
       </header>
@@ -216,7 +254,7 @@ function App() {
           {newsList.map((news, index) => (
             <div key={index} style={styles.reportCard}>
               <h4>{news.title}</h4>
-              {news.isAnalyzing ? <div>⌛ Analyzing...</div> : 
+              {news.isAnalyzing ? <div>⌛ Deep Analyzing...</div> : 
               <>
                 <p style={styles.summaryTxt}>{news.summary}</p>
                 <div style={{ display: 'flex', gap: '10px' }}>
@@ -241,6 +279,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   hStack: { display: 'flex', alignItems: 'center', gap: '10px' },
   input: { padding: '10px', border: '1px solid #ccc', borderRadius: '4px' },
   mainBtn: { padding: '10px 20px', backgroundColor: '#2c3e50', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' },
+  keyBtn: { padding: '5px 10px', backgroundColor: '#f39c12', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', marginRight: '5px' },
   logoutBtn: { padding: '5px 10px', cursor: 'pointer' },
   searchSection: { display: 'flex', gap: '10px', marginBottom: '20px' },
   infoBanner: { padding: '10px', backgroundColor: '#e1f5fe', marginBottom: '20px' },
