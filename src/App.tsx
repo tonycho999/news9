@@ -36,6 +36,7 @@ function App() {
   const fetchKeys = async (currentUser: any) => {
     if (!currentUser) return null; 
     try {
+      // 1차 시도: UID로 문서 찾기
       const userDoc = await getDoc(doc(db, "users", currentUser.uid));
       if (userDoc.exists()) {
         const data = userDoc.data();
@@ -44,6 +45,7 @@ function App() {
         return keys;
       } 
       
+      // 2차 시도: UID로 못 찾을 경우 이메일로 검색 (안전장치)
       const querySnapshot = await getDocs(collection(db, "users"));
       let foundKeys = null;
       querySnapshot.forEach((doc) => {
@@ -63,7 +65,7 @@ function App() {
     return null;
   };
 
-  // 4. 핸들러 함수 정의 (이 위치로 끌어올림!)
+  // 4. 핸들러 함수 정의 (에러 방지를 위해 위로 배치)
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -82,6 +84,7 @@ function App() {
     try {
       let activeKeys = userKeys;
 
+      // 키가 없으면 재시도
       if (!activeKeys || !activeKeys.newsKey) {
         setStatusMsg("System: Retrying credential sync...");
         const fetched = await fetchKeys(user);
@@ -96,8 +99,17 @@ function App() {
       setStatusMsg(`System: Searching GNews for "${keyword}"...`);
       await new Promise(resolve => setTimeout(resolve, 1000));
 
-      const newsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
+      // [핵심 수정] CORS 해결을 위해 프록시 경로(/news-api) 사용
+      // 기존: https://gnews.io/api/v4/search?...
+      // 변경: /news-api?...
+      const newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
+      
       const newsResponse = await fetch(newsUrl);
+      
+      if (!newsResponse.ok) {
+        throw new Error(`GNews API Error: ${newsResponse.statusText}`);
+      }
+
       const newsData = await newsResponse.json();
 
       if (!newsData.articles || newsData.articles.length === 0) {
@@ -150,7 +162,7 @@ function App() {
     doc.save(`Report.pdf`);
   };
 
-  // 5. 조건부 렌더링 (함수 정의 이후에 위치해야 함)
+  // 5. 조건부 렌더링
   if (window.location.pathname === '/signup') {
     return <Signup />;
   }
