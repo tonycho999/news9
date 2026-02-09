@@ -29,7 +29,9 @@ export function useNewsIntel() {
   const [finalReport, setFinalReport] = useState('');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [cooldown, setCooldown] = useState(0);
-  const [activeModelName, setActiveModelName] = useState("models/gemini-1.5-flash"); // 기본값
+  
+  // 선택된 모델 이름
+  const [activeModelName, setActiveModelName] = useState("models/gemini-1.5-flash");
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -85,33 +87,36 @@ export function useNewsIntel() {
     }
   };
 
-  // 모델 자동 감지 (버전 무관)
+  // [핵심 변경] 3.0 -> 2.5 -> 2.0 -> 1.5 순서로 검색 (Pro 제외)
   const detectBestModel = async (apiKey: string) => {
-    setStatusMsg("System: Auto-detecting AI Model...");
+    setStatusMsg("System: Searching for latest Flash models (3.0 -> 1.5)...");
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
       const data = await response.json();
       
       if (!data.models) throw new Error("List failed");
 
+      // 1. 텍스트 생성 가능하고 && 이름에 'pro'가 없는 모델만 필터링
       const capableModels = data.models.filter((m: any) => 
-        m.supportedGenerationMethods?.includes("generateContent")
+        m.supportedGenerationMethods?.includes("generateContent") &&
+        !m.name.toLowerCase().includes("pro") // Pro 제외 (속도/비용 이슈 방지)
       );
 
-      if (capableModels.length === 0) throw new Error("No models found.");
+      if (capableModels.length === 0) throw new Error("No non-pro models found.");
 
-      // 우선순위: 1.5-flash -> 1.5-pro -> pro-latest -> pro -> 아무거나
-      let bestModel = capableModels.find((m: any) => m.name.includes("gemini-1.5-flash")) || 
-                      capableModels.find((m: any) => m.name.includes("gemini-1.5-pro")) ||
-                      capableModels.find((m: any) => m.name.includes("gemini-pro-latest")) ||
-                      capableModels.find((m: any) => m.name.includes("gemini-pro")) ||
+      // 2. 우선순위: 3.0 -> 2.5 -> 2.0 -> 1.5 -> 아무거나
+      let bestModel = capableModels.find((m: any) => m.name.includes("gemini-3.0")) || 
+                      capableModels.find((m: any) => m.name.includes("gemini-2.5")) ||
+                      capableModels.find((m: any) => m.name.includes("gemini-2.0")) ||
+                      capableModels.find((m: any) => m.name.includes("gemini-1.5-flash")) ||
+                      capableModels.find((m: any) => m.name.includes("flash")) ||
                       capableModels[0];
 
-      console.log("✅ Auto-selected Model:", bestModel.name);
+      console.log(`✅ Auto-selected Model (High-Ver, No-Pro): ${bestModel.name}`);
       return bestModel.name;
 
     } catch (e) {
-      console.warn("Detection failed, using fallback.");
+      console.warn("Detection failed, defaulting to 1.5 flash.");
       return "models/gemini-1.5-flash"; 
     }
   };
@@ -127,7 +132,7 @@ export function useNewsIntel() {
       if (!activeKeys?.newsKey) activeKeys = await fetchKeys(user);
       if (!activeKeys?.newsKey) throw new Error("API Keys missing.");
 
-      // 1. 모델 감지
+      // 1. 모델 감지 (3.0 -> 1.5 순서, Pro 제외)
       const foundModel = await detectBestModel(activeKeys.geminiKey);
       setActiveModelName(foundModel);
 
@@ -159,7 +164,7 @@ export function useNewsIntel() {
         let attempts = 0; 
         let summary = "Initializing AI...";
         
-        setStatusMsg(`Analyzing ${i+1}/${articles.length}...`);
+        setStatusMsg(`Analyzing ${i+1}/${articles.length} using ${foundModel.replace('models/', '')}...`);
         document.title = `(${i+1}/${articles.length}) Analyzing...`;
         
         while(attempts < 3 && !success) {
@@ -180,13 +185,11 @@ export function useNewsIntel() {
                      })
                  });
 
-                 // [중요 수정] 429 에러 발생 시 대기 시간 60초(1분)로 증가
                  if (res.status === 429) { 
                      summary = "🛑 Speed Limit Hit. Cooling down for 60s...";
                      setNewsList(prev => prev.map((item, idx) => idx === i ? { ...item, summary } : item));
                      setStatusMsg(`⚠️ Rate Limit (429). Pausing for 60 seconds...`);
-                     
-                     await new Promise(r => setTimeout(r, 60000)); // 60초 대기
+                     await new Promise(r => setTimeout(r, 60000)); 
                      attempts++; continue; 
                  }
                  
@@ -210,13 +213,12 @@ export function useNewsIntel() {
                  attempts++; 
                  summary = `[Retry ${attempts}/3: ${e.message}]`;
                  setNewsList(prev => prev.map((item, idx) => idx === i ? { ...item, summary } : item));
-                 await new Promise(r => setTimeout(r, 5000)); // 일반 에러는 5초 대기
+                 await new Promise(r => setTimeout(r, 5000)); 
              }
         }
         
         setNewsList(prev => prev.map((item, idx) => idx === i ? { ...item, summary, isAnalyzing: false } : item));
         
-        // 기사 사이 랜덤 대기 (3초 ~ 7초로 약간 늘림)
         const delay = Math.floor(Math.random() * (7000 - 3000 + 1) + 3000);
         await new Promise(r => setTimeout(r, delay));
       }
