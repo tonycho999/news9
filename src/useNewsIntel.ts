@@ -260,13 +260,15 @@ export function useNewsIntel() {
       const fromDate = `${targetDate}T00:00:00+08:00`;
       const toDate = `${targetDate}T23:59:59+08:00`;
       
-      let newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&from=${encodeURIComponent(fromDate)}&to=${encodeURIComponent(toDate)}&token=${activeKeys.newsKey}`;
+      // [수정] max=50 으로 변경
+      let newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=50&from=${encodeURIComponent(fromDate)}&to=${encodeURIComponent(toDate)}&token=${activeKeys.newsKey}`;
       let newsRes = await fetch(newsUrl);
       let newsData = await newsRes.json();
       
       if (!newsData.articles?.length) {
            setStatusMsg(`System: Searching LATEST news...`);
-           newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
+           // [수정] max=50 으로 변경
+           newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=50&token=${activeKeys.newsKey}`;
            newsRes = await fetch(newsUrl);
            newsData = await newsRes.json();
       }
