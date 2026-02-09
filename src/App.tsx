@@ -22,6 +22,11 @@ function App() {
   const [statusMsg, setStatusMsg] = useState('');
   const [userKeys, setUserKeys] = useState<{ newsKey: string; geminiKey: string } | null>(null);
 
+  // 종합 요약 관련 상태
+  const [showModal, setShowModal] = useState(false);
+  const [finalReport, setFinalReport] = useState('');
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -30,29 +35,46 @@ function App() {
     return () => unsubscribe();
   }, []);
 
+  // [핵심 변경] 키 가져오기 로직 (로컬 저장소 우선 확인)
   const fetchKeys = async (currentUser: any) => {
     if (!currentUser) return null; 
+
+    // 1. 브라우저 금고(Local Storage) 먼저 확인 - DB 연결 안 함
+    const localKeyData = localStorage.getItem(`api_keys_${currentUser.uid}`);
+    if (localKeyData) {
+        const parsedKeys = JSON.parse(localKeyData);
+        if (parsedKeys.newsKey && parsedKeys.geminiKey) {
+            console.log("✅ Loaded keys from Local Storage (No DB Connection)");
+            setUserKeys(parsedKeys);
+            return parsedKeys;
+        }
+    }
+
+    // 2. 로컬에 없으면 DB에서 가져옴 (최초 1회만 실행됨)
+    console.log("🌐 Fetching keys from DB...");
     try {
       const userDoc = await getDoc(doc(db, "users", currentUser.uid));
+      let keys = null;
+
       if (userDoc.exists()) {
         const data = userDoc.data();
-        const keys = { newsKey: data.newsKey || "", geminiKey: data.geminiKey || "" };
+        keys = { newsKey: data.newsKey || "", geminiKey: data.geminiKey || "" };
+      } else {
+        // 이메일로 찾기 (비상용)
+        const querySnapshot = await getDocs(collection(db, "users"));
+        querySnapshot.forEach((doc) => {
+          const data = doc.data();
+          if (data.email === currentUser.email) {
+            keys = { newsKey: data.newsKey || "", geminiKey: data.geminiKey || "" };
+          }
+        });
+      }
+      
+      if (keys) {
+        // [중요] DB에서 가져온 키를 브라우저에 영구 저장
+        localStorage.setItem(`api_keys_${currentUser.uid}`, JSON.stringify(keys));
         setUserKeys(keys);
         return keys;
-      } 
-      
-      const querySnapshot = await getDocs(collection(db, "users"));
-      let foundKeys = null;
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        if (data.email === currentUser.email) {
-          foundKeys = { newsKey: data.newsKey || "", geminiKey: data.geminiKey || "" };
-        }
-      });
-      
-      if (foundKeys) {
-        setUserKeys(foundKeys);
-        return foundKeys;
       }
     } catch (error) {
       console.error("Key fetch error:", error);
@@ -60,14 +82,22 @@ function App() {
     return null;
   };
 
+  // 키 업데이트 시에도 로컬 저장소 동기화
   const manualUpdateKey = async () => {
     const newKey = prompt("🔑 Enter a NEW Gemini API Key from 'aistudio.google.com':");
     if (newKey && user) {
         const cleanKey = newKey.trim();
         try {
+            // DB 업데이트
             await updateDoc(doc(db, "users", user.uid), {
                 geminiKey: cleanKey
             });
+
+            // [중요] 로컬 저장소도 같이 업데이트 (그래야 DB 연결 안함)
+            const currentKeys = userKeys || { newsKey: '', geminiKey: '' };
+            const newKeys = { ...currentKeys, geminiKey: cleanKey };
+            localStorage.setItem(`api_keys_${user.uid}`, JSON.stringify(newKeys));
+
             alert("✅ Key Updated! Reloading...");
             window.location.reload(); 
         } catch (e) {
@@ -85,25 +115,27 @@ function App() {
     }
   };
 
+  // 로그아웃 시 로컬 키는 보안상 남겨둘지 삭제할지 선택 (여기선 편의를 위해 유지)
+  const handleLogout = () => {
+      // localStorage.removeItem(`api_keys_${user.uid}`); // 보안을 원하면 이 주석 해제
+      signOut(auth);
+  };
+
   const findWorkingModel = async (apiKey: string) => {
     try {
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
         const data = await response.json();
         
-        if (!data.models) return "models/gemini-1.5-flash"; // 기본값
+        if (!data.models) return "models/gemini-1.5-flash"; 
 
         const viableModel = data.models.find((m: any) => 
             m.supportedGenerationMethods?.includes("generateContent") &&
             (m.name.includes("flash") || m.name.includes("pro"))
         );
 
-        if (viableModel) {
-            console.log("✅ Auto-Detected Model:", viableModel.name);
-            return viableModel.name;
-        }
+        if (viableModel) return viableModel.name;
         return "models/gemini-1.5-flash"; 
     } catch (e) {
-        console.warn("Model detection failed, using default.");
         return "models/gemini-1.5-flash";
     }
   };
@@ -112,21 +144,23 @@ function App() {
     if (!keyword) return alert("Please enter a topic.");
     
     setIsFinished(false);
+    setShowModal(false);
     setNewsList([]); 
 
     try {
       let activeKeys = userKeys;
 
+      // 키가 없으면 가져오기 시도 (로컬 -> DB 순)
       if (!activeKeys || !activeKeys.newsKey) {
-        setStatusMsg("System: Check Credentials...");
+        setStatusMsg("System: Checking Credentials...");
         const fetched = await fetchKeys(user);
         if (!fetched || !fetched.newsKey) {
-            throw new Error("API Keys missing. Please use 'Change Keys' button.");
+            throw new Error("API Keys missing.");
         }
         activeKeys = fetched;
       }
 
-      setStatusMsg("System: Auto-detecting best AI model...");
+      setStatusMsg("System: Initializing AI...");
       let targetModel = "models/gemini-1.5-flash"; 
       try {
           targetModel = await findWorkingModel(activeKeys.geminiKey);
@@ -153,17 +187,15 @@ function App() {
       }));
       setNewsList(realArticles);
 
-      // --- [핵심] 끈기 있는 Gemini 루프 ---
       for (let i = 0; i < realArticles.length; i++) {
         let attempts = 0;
         let success = false;
         let summaryText = "Analysis unavailable.";
 
-        // 최대 2번까지 재시도 (총 3번 시도)
+        setStatusMsg(`System: Analyzing article ${i + 1}/${realArticles.length}...`);
+
         while (attempts < 3 && !success) {
             try {
-                setStatusMsg(`System: Analyzing article ${i + 1}/${realArticles.length}${attempts > 0 ? ` (Retry ${attempts})...` : '...'}`);
-                
                 const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel}:generateContent?key=${activeKeys.geminiKey}`;
                 
                 const geminiResponse = await fetch(geminiUrl, {
@@ -174,27 +206,31 @@ function App() {
                   })
                 });
 
-                // 429 Error (Too Many Requests) 발생 시
                 if (geminiResponse.status === 429) {
-                    console.warn(`Rate Limit Hit on item ${i}. Waiting 10s...`);
-                    setStatusMsg(`⚠️ Speed Limit Hit. Cooling down for 10s...`);
-                    await new Promise(resolve => setTimeout(resolve, 10000)); // 10초 대기
+                    setStatusMsg(`⚠️ Speed Limit. Cooling down for 10s...`);
+                    await new Promise(resolve => setTimeout(resolve, 10000));
                     attempts++;
-                    continue; // 다시 시도
+                    continue; 
                 }
 
                 if (geminiResponse.status !== 200) {
-                    throw new Error("API Error");
+                     if (geminiResponse.status === 400 || geminiResponse.status === 404) {
+                        const errData = await geminiResponse.json();
+                        if (window.confirm(`Gemini Key Error: ${errData.error?.message}\nUpdate Key?`)) {
+                            manualUpdateKey();
+                            return;
+                        }
+                     }
+                     throw new Error("API Error");
                 }
 
                 const geminiData = await geminiResponse.json();
                 summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Analysis unavailable.";
-                success = true; // 성공!
+                success = true;
 
             } catch (error) {
-                console.error(`Attempt ${attempts + 1} failed:`, error);
                 attempts++;
-                if (attempts < 3) await new Promise(resolve => setTimeout(resolve, 2000)); // 에러나면 2초 쉬고 재시도
+                if (attempts < 3) await new Promise(resolve => setTimeout(resolve, 2000));
             }
         }
 
@@ -202,7 +238,6 @@ function App() {
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
         ));
         
-        // [중요] 기본 휴식 시간을 3초로 늘림 (안전 운전)
         await new Promise(resolve => setTimeout(resolve, 3000));
       }
 
@@ -215,11 +250,53 @@ function App() {
     }
   };
 
-  const savePDF = (item: NewsItem) => {
+  const generateDailyBriefing = async () => {
+    setIsGeneratingReport(true);
+    setFinalReport("Generating comprehensive report...");
+    setShowModal(true);
+
+    try {
+        const allSummaries = newsList.map(n => `- ${n.title}: ${n.summary}`).join("\n");
+        const prompt = `Based on the following news summaries about "${keyword}", write a comprehensive executive briefing.
+        Structure it with:
+        1. Key Trends (What is happening overall?)
+        2. Major Details (Important facts)
+        3. Conclusion (What this means)
+        
+        News Data:
+        ${allSummaries}`;
+
+        let targetModel = "models/gemini-1.5-flash"; 
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel}:generateContent?key=${userKeys?.geminiKey}`;
+        const response = await fetch(geminiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }]
+            })
+        });
+
+        const data = await response.json();
+        const report = data.candidates?.[0]?.content?.parts?.[0]?.text || "Report generation failed.";
+        setFinalReport(report);
+
+    } catch (e) {
+        setFinalReport("Error generating report.");
+    } finally {
+        setIsGeneratingReport(false);
+    }
+  };
+
+  const downloadFinalPDF = () => {
     const doc = new jsPDF();
-    doc.text(item.title, 10, 20);
-    doc.text(item.summary || "", 10, 40, { maxWidth: 180 });
-    doc.save(`Report.pdf`);
+    doc.setFontSize(16);
+    doc.text(`Daily Briefing: ${keyword}`, 10, 20);
+    
+    doc.setFontSize(11);
+    const splitText = doc.splitTextToSize(finalReport, 180);
+    doc.text(splitText, 10, 30);
+    
+    doc.save(`${keyword}_Briefing.pdf`);
   };
 
   if (window.location.pathname === '/signup') return <Signup />;
@@ -247,8 +324,7 @@ function App() {
         <h2 style={{ margin: 0 }}>PH NEWS INTEL</h2>
         <div style={styles.hStack}>
           <span>{user.email}</span>
-          <button onClick={manualUpdateKey} style={styles.keyBtn}>🔑 Change Keys</button>
-          <button onClick={() => signOut(auth)} style={styles.logoutBtn}>Logout</button>
+          <button onClick={handleLogout} style={styles.logoutBtn}>Logout</button>
         </div>
       </header>
       <main style={{ marginTop: '30px' }}>
@@ -256,23 +332,54 @@ function App() {
           <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="Topic..." style={{ ...styles.input, flex: 1 }} />
           <button onClick={startAnalysis} style={styles.mainBtn}>START ANALYSIS</button>
         </div>
-        {statusMsg && <div style={isFinished ? styles.doneBanner : styles.infoBanner}>{statusMsg}</div>}
+
+        {statusMsg && (
+            <div style={{ ... (isFinished ? styles.doneBanner : styles.infoBanner), display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>{statusMsg}</span>
+                {isFinished && (
+                    <button onClick={generateDailyBriefing} style={styles.briefingBtn}>
+                        📢 CREATE DAILY BRIEFING
+                    </button>
+                )}
+            </div>
+        )}
+
         <div style={styles.newsGrid}>
           {newsList.map((news, index) => (
             <div key={index} style={styles.reportCard}>
               <h4>{news.title}</h4>
-              {news.isAnalyzing ? <div>⌛ Deep Analyzing...</div> : 
+              {news.isAnalyzing ? <div>⌛ Analyzing...</div> : 
               <>
                 <p style={styles.summaryTxt}>{news.summary}</p>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button onClick={() => savePDF(news)} style={styles.pdfBtn}>PDF</button>
-                  <a href={news.link} target="_blank" rel="noopener noreferrer" style={styles.linkBtn}>SOURCE</a>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <a href={news.link} target="_blank" rel="noopener noreferrer" style={styles.linkBtn}>SOURCE ▶</a>
                 </div>
               </>}
             </div>
           ))}
         </div>
       </main>
+
+      {showModal && (
+          <div style={styles.modalOverlay}>
+              <div style={styles.modalContent}>
+                  <h3 style={{ borderBottom: '1px solid #ddd', paddingBottom: '10px' }}>
+                      📋 Executive Daily Briefing: {keyword}
+                  </h3>
+                  <div style={styles.reportBox}>
+                    {isGeneratingReport ? "✍️ AI is writing the final report..." : finalReport}
+                  </div>
+                  <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                      <button onClick={() => setShowModal(false)} style={styles.closeBtn}>Close</button>
+                      {!isGeneratingReport && (
+                          <button onClick={downloadFinalPDF} style={styles.pdfBtn}>
+                              ⬇️ Download Full PDF
+                          </button>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
     </div>
   );
 }
@@ -286,16 +393,20 @@ const styles: { [key: string]: React.CSSProperties } = {
   hStack: { display: 'flex', alignItems: 'center', gap: '10px' },
   input: { padding: '10px', border: '1px solid #ccc', borderRadius: '4px' },
   mainBtn: { padding: '10px 20px', backgroundColor: '#2c3e50', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' },
-  keyBtn: { padding: '5px 10px', backgroundColor: '#f39c12', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', marginRight: '5px' },
   logoutBtn: { padding: '5px 10px', cursor: 'pointer' },
   searchSection: { display: 'flex', gap: '10px', marginBottom: '20px' },
-  infoBanner: { padding: '10px', backgroundColor: '#e1f5fe', marginBottom: '20px' },
-  doneBanner: { padding: '10px', backgroundColor: '#e8f5e9', marginBottom: '20px' },
+  infoBanner: { padding: '15px', backgroundColor: '#e1f5fe', marginBottom: '20px', borderRadius: '4px' },
+  doneBanner: { padding: '15px', backgroundColor: '#e8f5e9', marginBottom: '20px', borderRadius: '4px', border: '1px solid #c8e6c9' },
   newsGrid: { display: 'flex', flexDirection: 'column', gap: '15px' },
-  reportCard: { padding: '20px', border: '1px solid #ddd', borderRadius: '8px' },
-  summaryTxt: { lineHeight: '1.6', fontSize: '14px' },
-  pdfBtn: { padding: '5px 10px', backgroundColor: '#27ae60', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' },
-  linkBtn: { padding: '5px 10px', backgroundColor: '#34495e', color: '#fff', textDecoration: 'none', borderRadius: '4px', fontSize: '12px' }
+  reportCard: { padding: '20px', border: '1px solid #ddd', borderRadius: '8px', backgroundColor: '#fff' },
+  summaryTxt: { lineHeight: '1.6', fontSize: '14px', color: '#444' },
+  briefingBtn: { padding: '8px 15px', backgroundColor: '#27ae60', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' },
+  linkBtn: { padding: '5px 15px', backgroundColor: '#34495e', color: '#fff', textDecoration: 'none', borderRadius: '20px', fontSize: '12px', fontWeight: 'bold' },
+  modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 },
+  modalContent: { backgroundColor: '#fff', padding: '30px', borderRadius: '10px', width: '600px', maxHeight: '80vh', display: 'flex', flexDirection: 'column' },
+  reportBox: { whiteSpace: 'pre-wrap', lineHeight: '1.6', fontSize: '14px', marginTop: '10px', flex: 1, overflowY: 'auto', padding: '10px', backgroundColor: '#f9f9f9', borderRadius: '4px' },
+  pdfBtn: { padding: '10px 20px', backgroundColor: '#e74c3c', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' },
+  closeBtn: { padding: '10px 20px', backgroundColor: '#95a5a6', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }
 };
 
 export default App;
