@@ -61,7 +61,7 @@ function App() {
   };
 
   const manualUpdateKey = async () => {
-    const newKey = prompt("🔑 Enter a NEW Gemini API Key from 'aistudio.google.com':\n(Do NOT use the Firebase Key starting with same letters)");
+    const newKey = prompt("🔑 Enter a NEW Gemini API Key from 'aistudio.google.com':");
     if (newKey && user) {
         const cleanKey = newKey.trim();
         try {
@@ -85,17 +85,13 @@ function App() {
     }
   };
 
-  // [핵심 기능] 사용 가능한 모델을 스스로 찾아내는 함수
   const findWorkingModel = async (apiKey: string) => {
     try {
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
         const data = await response.json();
         
-        if (!data.models) {
-            throw new Error(data.error?.message || "Invalid API Key");
-        }
+        if (!data.models) return "models/gemini-1.5-flash"; // 기본값
 
-        // 'generateContent' 기능을 지원하는 모델 중 가장 최신 모델을 찾음
         const viableModel = data.models.find((m: any) => 
             m.supportedGenerationMethods?.includes("generateContent") &&
             (m.name.includes("flash") || m.name.includes("pro"))
@@ -103,12 +99,12 @@ function App() {
 
         if (viableModel) {
             console.log("✅ Auto-Detected Model:", viableModel.name);
-            return viableModel.name; // 예: 'models/gemini-1.5-flash'
+            return viableModel.name;
         }
-        return "models/gemini-pro"; // 못 찾으면 기본값
+        return "models/gemini-1.5-flash"; 
     } catch (e) {
-        console.error("Model Detection Failed:", e);
-        throw e;
+        console.warn("Model detection failed, using default.");
+        return "models/gemini-1.5-flash";
     }
   };
 
@@ -130,24 +126,13 @@ function App() {
         activeKeys = fetched;
       }
 
-      // [1단계] 사용 가능한 AI 모델 자동 감지
       setStatusMsg("System: Auto-detecting best AI model...");
-      let targetModel = "models/gemini-1.5-flash"; // 기본값
+      let targetModel = "models/gemini-1.5-flash"; 
       try {
           targetModel = await findWorkingModel(activeKeys.geminiKey);
-          // 모델명 앞에 'models/'가 없으면 붙여줌 (API 요구사항)
-          if (!targetModel.startsWith('models/')) {
-              targetModel = `models/${targetModel}`;
-          }
-      } catch (e: any) {
-          // 모델 목록조차 못 가져오면 키가 틀린 것임
-          if (window.confirm(`⚠️ API Key Error: ${e.message}\n\nUpdate Key?`)) {
-              manualUpdateKey();
-              return;
-          }
-      }
+          if (!targetModel.startsWith('models/')) targetModel = `models/${targetModel}`;
+      } catch (e) {}
 
-      // [2단계] 뉴스 검색
       setStatusMsg(`System: Searching GNews for "${keyword}"...`);
       await new Promise(resolve => setTimeout(resolve, 1000));
 
@@ -168,35 +153,57 @@ function App() {
       }));
       setNewsList(realArticles);
 
-      // [3단계] Gemini 루프 (찾아낸 모델 사용)
+      // --- [핵심] 끈기 있는 Gemini 루프 ---
       for (let i = 0; i < realArticles.length; i++) {
-        setStatusMsg(`System: Analyzing article ${i + 1} with ${targetModel.replace('models/', '')}...`);
-        
-        // 자동 감지된 모델 URL 사용
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel}:generateContent?key=${activeKeys.geminiKey}`;
-        
-        const geminiResponse = await fetch(geminiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: `Summarize this news title in 3 sentences: "${realArticles[i].title}"` }] }]
-          })
-        });
+        let attempts = 0;
+        let success = false;
+        let summaryText = "Analysis unavailable.";
 
-        const geminiData = await geminiResponse.json();
-        
-        if (geminiResponse.status !== 200) {
-             console.error("Gemini Error:", geminiData);
-             // 모델 감지 후에도 에러가 나면 내용 문제일 수 있음, 일단 진행
+        // 최대 2번까지 재시도 (총 3번 시도)
+        while (attempts < 3 && !success) {
+            try {
+                setStatusMsg(`System: Analyzing article ${i + 1}/${realArticles.length}${attempts > 0 ? ` (Retry ${attempts})...` : '...'}`);
+                
+                const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel}:generateContent?key=${activeKeys.geminiKey}`;
+                
+                const geminiResponse = await fetch(geminiUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    contents: [{ parts: [{ text: `Summarize this news title in 3 sentences: "${realArticles[i].title}"` }] }]
+                  })
+                });
+
+                // 429 Error (Too Many Requests) 발생 시
+                if (geminiResponse.status === 429) {
+                    console.warn(`Rate Limit Hit on item ${i}. Waiting 10s...`);
+                    setStatusMsg(`⚠️ Speed Limit Hit. Cooling down for 10s...`);
+                    await new Promise(resolve => setTimeout(resolve, 10000)); // 10초 대기
+                    attempts++;
+                    continue; // 다시 시도
+                }
+
+                if (geminiResponse.status !== 200) {
+                    throw new Error("API Error");
+                }
+
+                const geminiData = await geminiResponse.json();
+                summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Analysis unavailable.";
+                success = true; // 성공!
+
+            } catch (error) {
+                console.error(`Attempt ${attempts + 1} failed:`, error);
+                attempts++;
+                if (attempts < 3) await new Promise(resolve => setTimeout(resolve, 2000)); // 에러나면 2초 쉬고 재시도
+            }
         }
-
-        const summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Analysis unavailable (Content blocked or Error).";
 
         setNewsList(prev => prev.map((item, idx) => 
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
         ));
         
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // [중요] 기본 휴식 시간을 3초로 늘림 (안전 운전)
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
 
       setIsFinished(true);
