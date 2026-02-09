@@ -61,15 +61,17 @@ function App() {
   };
 
   const updateGeminiKey = async () => {
-    const newKey = prompt("⚠️ Gemini API Key Error!\n\nThe current key is invalid or lacks permission.\nPlease paste a new Gemini Key from 'aistudio.google.com':");
+    // [중요] 키를 입력받을 때 공백 제거(trim) 처리
+    let newKey = prompt("⚠️ Gemini Key Issue.\n\nPlease paste a new API Key from 'aistudio.google.com':");
     if (newKey && user) {
+        newKey = newKey.trim(); // 공백 제거
         try {
             await updateDoc(doc(db, "users", user.uid), {
                 geminiKey: newKey
             });
-            alert("✅ Key updated! analyzing will restart.");
-            setUserKeys(prev => prev ? { ...prev, geminiKey: newKey } : null);
-            startAnalysis(); 
+            alert("✅ Key Saved! The page will reload to apply changes.");
+            // [핵심 해결책] 강제 새로고침을 통해 메모리에 남은 '옛날 키'를 완전히 삭제함
+            window.location.reload(); 
         } catch (e) {
             alert("Failed to update key in DB.");
         }
@@ -122,11 +124,12 @@ function App() {
       }));
       setNewsList(realArticles);
 
-      // [핵심 변경] Gemini 루프: 분석 완료 즉시 반영
+      // Gemini 루프
       for (let i = 0; i < realArticles.length; i++) {
         setStatusMsg(`System: Analyzing article ${i + 1} of ${realArticles.length}...`);
         
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${activeKeys.geminiKey}`;
+        // [수정] 모델명을 'gemini-1.5-flash-latest'로 변경 (가장 최신 버전 자동 매칭)
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${activeKeys.geminiKey}`;
         
         const geminiResponse = await fetch(geminiUrl, {
           method: 'POST',
@@ -136,24 +139,26 @@ function App() {
           })
         });
 
-        if (geminiResponse.status === 404 || geminiResponse.status === 400) {
+        // 에러 발생 시 처리
+        if (geminiResponse.status !== 200) {
             const errData = await geminiResponse.json();
             console.error("Gemini Error:", errData);
+            
+            // 404(모델 없음)나 400(키 오류)일 경우 팝업 띄움
             if (window.confirm(`Gemini Error: ${errData.error?.message}\n\nUpdate API Key?`)) {
                 await updateGeminiKey();
-                return; 
+                return; // 루프 즉시 종료
             }
         }
 
         const geminiData = await geminiResponse.json();
         const summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Deep analysis unavailable.";
 
-        // [핵심] 여기서 데이터를 받자마자 화면을 업데이트합니다.
         setNewsList(prev => prev.map((item, idx) => 
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
         ));
         
-        // [안전 장치] 연속 호출 에러 방지를 위해 딱 1초만 대기 (속도와 안정성 타협)
+        // 안전 대기 1초
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
 
