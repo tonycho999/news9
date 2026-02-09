@@ -35,23 +35,21 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // [핵심 변경] 키 가져오기 로직 (로컬 저장소 우선 확인)
   const fetchKeys = async (currentUser: any) => {
     if (!currentUser) return null; 
 
-    // 1. 브라우저 금고(Local Storage) 먼저 확인 - DB 연결 안 함
+    // 1. 브라우저 금고(Local Storage) 확인
     const localKeyData = localStorage.getItem(`api_keys_${currentUser.uid}`);
     if (localKeyData) {
         const parsedKeys = JSON.parse(localKeyData);
         if (parsedKeys.newsKey && parsedKeys.geminiKey) {
-            console.log("✅ Loaded keys from Local Storage (No DB Connection)");
+            console.log("✅ Loaded keys from Local Storage");
             setUserKeys(parsedKeys);
             return parsedKeys;
         }
     }
 
-    // 2. 로컬에 없으면 DB에서 가져옴 (최초 1회만 실행됨)
-    console.log("🌐 Fetching keys from DB...");
+    // 2. DB에서 가져오기 (최초 1회)
     try {
       const userDoc = await getDoc(doc(db, "users", currentUser.uid));
       let keys = null;
@@ -60,7 +58,6 @@ function App() {
         const data = userDoc.data();
         keys = { newsKey: data.newsKey || "", geminiKey: data.geminiKey || "" };
       } else {
-        // 이메일로 찾기 (비상용)
         const querySnapshot = await getDocs(collection(db, "users"));
         querySnapshot.forEach((doc) => {
           const data = doc.data();
@@ -71,7 +68,6 @@ function App() {
       }
       
       if (keys) {
-        // [중요] DB에서 가져온 키를 브라우저에 영구 저장
         localStorage.setItem(`api_keys_${currentUser.uid}`, JSON.stringify(keys));
         setUserKeys(keys);
         return keys;
@@ -82,18 +78,13 @@ function App() {
     return null;
   };
 
-  // 키 업데이트 시에도 로컬 저장소 동기화
   const manualUpdateKey = async () => {
     const newKey = prompt("🔑 Enter a NEW Gemini API Key from 'aistudio.google.com':");
     if (newKey && user) {
         const cleanKey = newKey.trim();
         try {
-            // DB 업데이트
-            await updateDoc(doc(db, "users", user.uid), {
-                geminiKey: cleanKey
-            });
-
-            // [중요] 로컬 저장소도 같이 업데이트 (그래야 DB 연결 안함)
+            await updateDoc(doc(db, "users", user.uid), { geminiKey: cleanKey });
+            
             const currentKeys = userKeys || { newsKey: '', geminiKey: '' };
             const newKeys = { ...currentKeys, geminiKey: cleanKey };
             localStorage.setItem(`api_keys_${user.uid}`, JSON.stringify(newKeys));
@@ -115,9 +106,7 @@ function App() {
     }
   };
 
-  // 로그아웃 시 로컬 키는 보안상 남겨둘지 삭제할지 선택 (여기선 편의를 위해 유지)
   const handleLogout = () => {
-      // localStorage.removeItem(`api_keys_${user.uid}`); // 보안을 원하면 이 주석 해제
       signOut(auth);
   };
 
@@ -125,14 +114,11 @@ function App() {
     try {
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
         const data = await response.json();
-        
         if (!data.models) return "models/gemini-1.5-flash"; 
-
         const viableModel = data.models.find((m: any) => 
             m.supportedGenerationMethods?.includes("generateContent") &&
             (m.name.includes("flash") || m.name.includes("pro"))
         );
-
         if (viableModel) return viableModel.name;
         return "models/gemini-1.5-flash"; 
     } catch (e) {
@@ -142,21 +128,16 @@ function App() {
 
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
-    
     setIsFinished(false);
     setShowModal(false);
     setNewsList([]); 
 
     try {
       let activeKeys = userKeys;
-
-      // 키가 없으면 가져오기 시도 (로컬 -> DB 순)
       if (!activeKeys || !activeKeys.newsKey) {
         setStatusMsg("System: Checking Credentials...");
         const fetched = await fetchKeys(user);
-        if (!fetched || !fetched.newsKey) {
-            throw new Error("API Keys missing.");
-        }
+        if (!fetched || !fetched.newsKey) throw new Error("API Keys missing.");
         activeKeys = fetched;
       }
 
@@ -172,13 +153,10 @@ function App() {
 
       const newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
       const newsResponse = await fetch(newsUrl);
-      
       if (!newsResponse.ok) throw new Error(`GNews API Error: ${newsResponse.statusText}`);
-      const newsData = await newsResponse.json();
       
-      if (!newsData.articles || newsData.articles.length === 0) {
-        throw new Error("No news found.");
-      }
+      const newsData = await newsResponse.json();
+      if (!newsData.articles || newsData.articles.length === 0) throw new Error("No news found.");
 
       const realArticles: NewsItem[] = newsData.articles.map((art: any) => ({
         title: art.title,
@@ -191,13 +169,11 @@ function App() {
         let attempts = 0;
         let success = false;
         let summaryText = "Analysis unavailable.";
-
         setStatusMsg(`System: Analyzing article ${i + 1}/${realArticles.length}...`);
 
         while (attempts < 3 && !success) {
             try {
                 const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel}:generateContent?key=${activeKeys.geminiKey}`;
-                
                 const geminiResponse = await fetch(geminiUrl, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -227,33 +203,33 @@ function App() {
                 const geminiData = await geminiResponse.json();
                 summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Analysis unavailable.";
                 success = true;
-
             } catch (error) {
                 attempts++;
                 if (attempts < 3) await new Promise(resolve => setTimeout(resolve, 2000));
             }
         }
-
-        setNewsList(prev => prev.map((item, idx) => 
-          idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
-        ));
-        
+        setNewsList(prev => prev.map((item, idx) => idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item));
         await new Promise(resolve => setTimeout(resolve, 3000));
       }
 
       setIsFinished(true);
       setStatusMsg('System: All Intelligence Gathered.');
-
     } catch (error: any) {
       console.error(error);
       setStatusMsg(`System Alert: ${error.message}`);
     }
   };
 
+  // [핵심 변경] 60초 타임아웃 적용된 Daily Briefing 생성
   const generateDailyBriefing = async () => {
     setIsGeneratingReport(true);
-    setFinalReport("Generating comprehensive report...");
+    // 사용자에게 60초까지 걸릴 수 있다고 안내
+    setFinalReport("✍️ AI is writing the Executive Briefing... (Allow up to 60 seconds for deep analysis)");
     setShowModal(true);
+
+    // 60초 타임아웃 설정 (AbortController 사용)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60,000ms = 1분
 
     try {
         const allSummaries = newsList.map(n => `- ${n.title}: ${n.summary}`).join("\n");
@@ -267,21 +243,34 @@ function App() {
         ${allSummaries}`;
 
         let targetModel = "models/gemini-1.5-flash"; 
+        
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel}:generateContent?key=${userKeys?.geminiKey}`;
+        
         const response = await fetch(geminiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contents: [{ parts: [{ text: prompt }] }]
-            })
+            }),
+            signal: controller.signal // 타임아웃 신호 연결
         });
 
+        clearTimeout(timeoutId); // 성공하면 타이머 해제
+
+        if (!response.ok) {
+            throw new Error(`Server Error: ${response.statusText}`);
+        }
+
         const data = await response.json();
-        const report = data.candidates?.[0]?.content?.parts?.[0]?.text || "Report generation failed.";
+        const report = data.candidates?.[0]?.content?.parts?.[0]?.text || "Report generation returned empty.";
         setFinalReport(report);
 
-    } catch (e) {
-        setFinalReport("Error generating report.");
+    } catch (e: any) {
+        if (e.name === 'AbortError') {
+            setFinalReport("⚠️ Error: Generation timed out (exceeded 60 seconds). Please try again or reduce news volume.");
+        } else {
+            setFinalReport(`⚠️ Error generating report: ${e.message}`);
+        }
     } finally {
         setIsGeneratingReport(false);
     }
@@ -367,7 +356,13 @@ function App() {
                       📋 Executive Daily Briefing: {keyword}
                   </h3>
                   <div style={styles.reportBox}>
-                    {isGeneratingReport ? "✍️ AI is writing the final report..." : finalReport}
+                    {/* [수정] 로딩 메시지 조건부 렌더링 */}
+                    {isGeneratingReport ? (
+                        <div style={{textAlign: 'center', marginTop: '20px'}}>
+                            <p style={{fontSize: '18px', fontWeight: 'bold'}}>✍️ Generating Report...</p>
+                            <p style={{color: '#666'}}>Please wait up to 60 seconds.</p>
+                        </div>
+                    ) : finalReport}
                   </div>
                   <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                       <button onClick={() => setShowModal(false)} style={styles.closeBtn}>Close</button>
