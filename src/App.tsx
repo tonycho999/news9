@@ -5,6 +5,9 @@ import { doc, getDoc, collection, getDocs, updateDoc } from 'firebase/firestore'
 import jsPDF from 'jspdf';
 import Signup from './Signup';
 
+// [설정] 쿨다운 시간 설정 (여기서 숫자를 바꾸면 됩니다)
+const COOLDOWN_SECONDS = 120; // 2분
+
 interface NewsItem {
   title: string;
   link: string;
@@ -27,6 +30,9 @@ function App() {
   const [finalReport, setFinalReport] = useState('');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
 
+  // [신규] 쿨다운 상태
+  const [cooldown, setCooldown] = useState(0);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -35,10 +41,20 @@ function App() {
     return () => unsubscribe();
   }, []);
 
+  // [신규] 쿨다운 타이머 로직
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (cooldown > 0) {
+      timer = setInterval(() => {
+        setCooldown((prev) => prev - 1);
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [cooldown]);
+
   const fetchKeys = async (currentUser: any) => {
     if (!currentUser) return null; 
 
-    // 1. 브라우저 금고(Local Storage) 확인
     const localKeyData = localStorage.getItem(`api_keys_${currentUser.uid}`);
     if (localKeyData) {
         const parsedKeys = JSON.parse(localKeyData);
@@ -49,7 +65,6 @@ function App() {
         }
     }
 
-    // 2. DB에서 가져오기 (최초 1회)
     try {
       const userDoc = await getDoc(doc(db, "users", currentUser.uid));
       let keys = null;
@@ -128,6 +143,12 @@ function App() {
 
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
+    // 쿨다운 중이면 실행 막음
+    if (cooldown > 0) return;
+
+    // [신규] 분석 시작 시 쿨다운 가동
+    setCooldown(COOLDOWN_SECONDS);
+
     setIsFinished(false);
     setShowModal(false);
     setNewsList([]); 
@@ -217,19 +238,17 @@ function App() {
     } catch (error: any) {
       console.error(error);
       setStatusMsg(`System Alert: ${error.message}`);
+      // 에러 나면 쿨다운 해제할지 결정 (여기선 에러나도 API 썼으니 유지)
     }
   };
 
-  // [핵심 변경] 60초 타임아웃 적용된 Daily Briefing 생성
   const generateDailyBriefing = async () => {
     setIsGeneratingReport(true);
-    // 사용자에게 60초까지 걸릴 수 있다고 안내
     setFinalReport("✍️ AI is writing the Executive Briefing... (Allow up to 60 seconds for deep analysis)");
     setShowModal(true);
 
-    // 60초 타임아웃 설정 (AbortController 사용)
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60,000ms = 1분
+    const timeoutId = setTimeout(() => controller.abort(), 60000); 
 
     try {
         const allSummaries = newsList.map(n => `- ${n.title}: ${n.summary}`).join("\n");
@@ -252,10 +271,10 @@ function App() {
             body: JSON.stringify({
               contents: [{ parts: [{ text: prompt }] }]
             }),
-            signal: controller.signal // 타임아웃 신호 연결
+            signal: controller.signal 
         });
 
-        clearTimeout(timeoutId); // 성공하면 타이머 해제
+        clearTimeout(timeoutId); 
 
         if (!response.ok) {
             throw new Error(`Server Error: ${response.statusText}`);
@@ -319,7 +338,15 @@ function App() {
       <main style={{ marginTop: '30px' }}>
         <div style={styles.searchSection}>
           <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="Topic..." style={{ ...styles.input, flex: 1 }} />
-          <button onClick={startAnalysis} style={styles.mainBtn}>START ANALYSIS</button>
+          
+          {/* [수정] 쿨다운 상태에 따른 버튼 스타일 변경 */}
+          <button 
+            onClick={startAnalysis} 
+            style={cooldown > 0 ? styles.disabledBtn : styles.mainBtn}
+            disabled={cooldown > 0}
+          >
+            {cooldown > 0 ? `WAIT ${cooldown}s` : "START ANALYSIS"}
+          </button>
         </div>
 
         {statusMsg && (
@@ -356,7 +383,6 @@ function App() {
                       📋 Executive Daily Briefing: {keyword}
                   </h3>
                   <div style={styles.reportBox}>
-                    {/* [수정] 로딩 메시지 조건부 렌더링 */}
                     {isGeneratingReport ? (
                         <div style={{textAlign: 'center', marginTop: '20px'}}>
                             <p style={{fontSize: '18px', fontWeight: 'bold'}}>✍️ Generating Report...</p>
@@ -387,7 +413,9 @@ const styles: { [key: string]: React.CSSProperties } = {
   vStack: { display: 'flex', flexDirection: 'column', gap: '10px', width: '300px' },
   hStack: { display: 'flex', alignItems: 'center', gap: '10px' },
   input: { padding: '10px', border: '1px solid #ccc', borderRadius: '4px' },
-  mainBtn: { padding: '10px 20px', backgroundColor: '#2c3e50', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' },
+  mainBtn: { padding: '10px 20px', backgroundColor: '#2c3e50', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', minWidth: '150px' },
+  // [신규] 비활성화 버튼 스타일
+  disabledBtn: { padding: '10px 20px', backgroundColor: '#95a5a6', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'not-allowed', minWidth: '150px' },
   logoutBtn: { padding: '5px 10px', cursor: 'pointer' },
   searchSection: { display: 'flex', gap: '10px', marginBottom: '20px' },
   infoBanner: { padding: '15px', backgroundColor: '#e1f5fe', marginBottom: '20px', borderRadius: '4px' },
