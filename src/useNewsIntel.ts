@@ -6,6 +6,9 @@ import jsPDF from 'jspdf';
 
 const COOLDOWN_SECONDS = 600; 
 
+// [수정] 비상용 키를 코드에 직접 내장 (하드코딩)
+const FALLBACK_GROQ_KEY = "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";
+
 export interface NewsItem {
   title: string;
   link: string;
@@ -24,13 +27,15 @@ export function useNewsIntel() {
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
   const [isFinished, setIsFinished] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
+  
+  // fallbackKey는 이제 상태에서 관리 안 함 (상수 사용)
   const [userKeys, setUserKeys] = useState<{ newsKey: string; geminiKey: string } | null>(null);
+  
   const [showModal, setShowModal] = useState(false);
   const [finalReport, setFinalReport] = useState('');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   
-  // 선택된 모델 이름
   const [activeModelName, setActiveModelName] = useState("models/gemini-1.5-flash");
 
   useEffect(() => {
@@ -66,7 +71,10 @@ export function useNewsIntel() {
             qs.forEach((doc) => { if (doc.data().email === currentUser.email) keys = doc.data(); });
         }
         if (keys) {
-             const mappedKeys = { newsKey: keys.newsKey || "", geminiKey: keys.geminiKey || "" };
+             const mappedKeys = { 
+                 newsKey: keys.newsKey || "", 
+                 geminiKey: keys.geminiKey || ""
+             };
              localStorage.setItem(`api_keys_${currentUser.uid}`, JSON.stringify(mappedKeys));
              setUserKeys(mappedKeys);
              return mappedKeys;
@@ -76,7 +84,9 @@ export function useNewsIntel() {
   };
 
   const manualUpdateKey = async () => {
+    // 이제 Gemini 키만 물어봅니다.
     const newKey = prompt("🔑 Enter a NEW Gemini API Key from 'aistudio.google.com':");
+    
     if (newKey && user) {
         try {
             await updateDoc(doc(db, "users", user.uid), { geminiKey: newKey.trim() });
@@ -87,38 +97,57 @@ export function useNewsIntel() {
     }
   };
 
-  // [핵심 변경] 3.0 -> 2.5 -> 2.0 -> 1.5 순서로 검색 (Pro 제외)
+  // 3.0 -> 2.5 -> 2.0 -> 1.5 순서로 모델 찾기
   const detectBestModel = async (apiKey: string) => {
-    setStatusMsg("System: Searching for latest Flash models (3.0 -> 1.5)...");
+    setStatusMsg("System: Connecting to AI Core..."); 
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
       const data = await response.json();
       
       if (!data.models) throw new Error("List failed");
 
-      // 1. 텍스트 생성 가능하고 && 이름에 'pro'가 없는 모델만 필터링
       const capableModels = data.models.filter((m: any) => 
         m.supportedGenerationMethods?.includes("generateContent") &&
-        !m.name.toLowerCase().includes("pro") // Pro 제외 (속도/비용 이슈 방지)
+        !m.name.toLowerCase().includes("pro") 
       );
 
-      if (capableModels.length === 0) throw new Error("No non-pro models found.");
+      if (capableModels.length === 0) throw new Error("No models found.");
 
-      // 2. 우선순위: 3.0 -> 2.5 -> 2.0 -> 1.5 -> 아무거나
       let bestModel = capableModels.find((m: any) => m.name.includes("gemini-3.0")) || 
                       capableModels.find((m: any) => m.name.includes("gemini-2.5")) ||
                       capableModels.find((m: any) => m.name.includes("gemini-2.0")) ||
                       capableModels.find((m: any) => m.name.includes("gemini-1.5-flash")) ||
-                      capableModels.find((m: any) => m.name.includes("flash")) ||
                       capableModels[0];
 
-      console.log(`✅ Auto-selected Model (High-Ver, No-Pro): ${bestModel.name}`);
+      console.log(`✅ Selected Model: ${bestModel.name}`);
       return bestModel.name;
 
     } catch (e) {
-      console.warn("Detection failed, defaulting to 1.5 flash.");
+      console.warn("Model detection failed, defaulting to 1.5 flash.");
       return "models/gemini-1.5-flash"; 
     }
+  };
+
+  // [수정] 내장된 FALLBACK_GROQ_KEY 사용
+  const callFallbackAI = async (title: string) => {
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+              "Authorization": `Bearer ${FALLBACK_GROQ_KEY}`, // 하드코딩된 키 사용
+              "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+              messages: [{
+                  role: "user",
+                  content: `Summarize this news title in 3 sentences: "${title}"`
+              }],
+              model: "llama3-8b-8192" 
+          })
+      });
+      
+      if (!response.ok) throw new Error("Fallback AI Failed");
+      const data = await response.json();
+      return data.choices[0]?.message?.content || "Fallback Error";
   };
 
   const startAnalysis = async () => {
@@ -132,12 +161,12 @@ export function useNewsIntel() {
       if (!activeKeys?.newsKey) activeKeys = await fetchKeys(user);
       if (!activeKeys?.newsKey) throw new Error("API Keys missing.");
 
-      // 1. 모델 감지 (3.0 -> 1.5 순서, Pro 제외)
+      // 1. 모델 감지
       const foundModel = await detectBestModel(activeKeys.geminiKey);
       setActiveModelName(foundModel);
 
       // 2. 뉴스 검색
-      setStatusMsg(`System: Searching GNews for "${keyword}" on ${targetDate}...`);
+      setStatusMsg(`System: Searching GNews for "${keyword}"...`);
       const fromDate = `${targetDate}T00:00:00+08:00`;
       const toDate = `${targetDate}T23:59:59+08:00`;
       
@@ -146,8 +175,8 @@ export function useNewsIntel() {
       let newsData = await newsRes.json();
       
       if (!newsData.articles?.length) {
-           console.warn("No news found for date, retrying without date filter...");
-           setStatusMsg(`System: No news on ${targetDate}. Searching LATEST news...`);
+           console.warn("Retry without date...");
+           setStatusMsg(`System: Searching LATEST news...`);
            newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
            newsRes = await fetch(newsUrl);
            newsData = await newsRes.json();
@@ -161,65 +190,59 @@ export function useNewsIntel() {
       // 3. 분석 루프
       for (let i = 0; i < articles.length; i++) {
         let success = false; 
-        let attempts = 0; 
-        let summary = "Initializing AI...";
+        let summary = "Initializing...";
         
-        setStatusMsg(`Analyzing ${i+1}/${articles.length} using ${foundModel.replace('models/', '')}...`);
+        setStatusMsg(`Analyzing article ${i+1}/${articles.length}...`);
         document.title = `(${i+1}/${articles.length}) Analyzing...`;
         
-        while(attempts < 3 && !success) {
+        // Gemini 시도 (최대 2회)
+        for (let attempts = 0; attempts < 2 && !success; attempts++) {
              try {
-                 const safetySettings = [
-                    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-                    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-                    { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-                    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-                 ];
-
                  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/${foundModel}:generateContent?key=${activeKeys.geminiKey}`, {
                      method: 'POST', 
                      headers: {'Content-Type': 'application/json'},
                      body: JSON.stringify({ 
                         contents: [{ parts: [{ text: `Summarize this news title in 3 sentences: "${articles[i].title}"` }] }], 
-                        safetySettings: safetySettings 
+                        safetySettings: [
+                            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+                        ]
                      })
                  });
 
-                 if (res.status === 429) { 
-                     summary = "🛑 Speed Limit Hit. Cooling down for 60s...";
-                     setNewsList(prev => prev.map((item, idx) => idx === i ? { ...item, summary } : item));
-                     setStatusMsg(`⚠️ Rate Limit (429). Pausing for 60 seconds...`);
-                     await new Promise(r => setTimeout(r, 60000)); 
-                     attempts++; continue; 
-                 }
-                 
-                 if (res.status !== 200) {
-                     const errData = await res.json();
-                     throw new Error(`API Error ${res.status}: ${errData.error?.message || res.statusText}`);
-                 }
-
-                 const data = await res.json();
-                 
-                 if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
-                     summary = data.candidates[0].content.parts[0].text;
-                     success = true;
+                 if (res.status === 200) {
+                     const data = await res.json();
+                     if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+                         summary = data.candidates[0].content.parts[0].text;
+                         success = true;
+                     }
                  } else {
-                     summary = "[Error: Empty Response]";
-                     success = true;
+                     throw new Error(`Gemini Error ${res.status}`);
                  }
-
-             } catch(e: any) { 
-                 console.error(e);
-                 attempts++; 
-                 summary = `[Retry ${attempts}/3: ${e.message}]`;
-                 setNewsList(prev => prev.map((item, idx) => idx === i ? { ...item, summary } : item));
-                 await new Promise(r => setTimeout(r, 5000)); 
+             } catch(e) { 
+                 console.warn("Gemini Failed, retrying...", e);
+                 await new Promise(r => setTimeout(r, 2000));
              }
+        }
+
+        // Gemini 실패 시 -> 하드코딩된 Fallback AI 투입
+        if (!success) {
+            try {
+                console.log("⚠️ Switching to Fallback AI...");
+                // 여기서 내장된 키를 자동으로 사용
+                summary = await callFallbackAI(articles[i].title);
+                success = true;
+            } catch (fallbackError) {
+                console.error("Fallback Failed:", fallbackError);
+                summary = "Analysis Unavailable (Both AIs Failed)";
+            }
         }
         
         setNewsList(prev => prev.map((item, idx) => idx === i ? { ...item, summary, isAnalyzing: false } : item));
         
-        const delay = Math.floor(Math.random() * (7000 - 3000 + 1) + 3000);
+        const delay = Math.floor(Math.random() * (5000 - 2000 + 1) + 2000);
         await new Promise(r => setTimeout(r, delay));
       }
       setIsFinished(true); setStatusMsg("Analysis Complete."); document.title = "Done!";
@@ -233,24 +256,15 @@ export function useNewsIntel() {
     try {
         const prompt = `Act as an executive editor. Based on these summaries, write a briefing:\n${newsList.map(n => n.title + ": " + n.summary).join('\n')}`;
         
-        const safetySettings = [
-            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-        ];
-
+        // 브리핑도 Gemini 우선, 실패시 처리 로직은 복잡해지니 일단 Gemini만 사용
         const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/${activeModelName}:generateContent?key=${userKeys?.geminiKey}`, {
             method: 'POST', 
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ 
-                contents: [{ parts: [{ text: prompt }] }],
-                safetySettings: safetySettings
-            }), 
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }), 
             signal: controller.signal
         });
         const data = await res.json();
-        setFinalReport(data.candidates?.[0]?.content?.parts?.[0]?.text || `Failed: ${JSON.stringify(data)}`);
+        setFinalReport(data.candidates?.[0]?.content?.parts?.[0]?.text || "Report Failed.");
     } catch(e: any) { setFinalReport(`Error: ${e.message}`); } 
     setIsGeneratingReport(false);
   };
@@ -268,6 +282,6 @@ export function useNewsIntel() {
     showModal, setShowModal, finalReport, isGeneratingReport,
     handleLogin: async (e: any) => { e.preventDefault(); try { await signInWithEmailAndPassword(auth, email, password); } catch { alert("Login Failed"); } },
     handleLogout: () => signOut(auth),
-    startAnalysis, generateDailyBriefing, downloadFinalPDF
+    startAnalysis, generateDailyBriefing, downloadFinalPDF, manualUpdateKey
   };
 }
