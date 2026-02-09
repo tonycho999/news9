@@ -13,7 +13,6 @@ interface NewsItem {
 }
 
 function App() {
-  // 1. 상태(State) 선언
   const [user, setUser] = useState<any>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -23,7 +22,6 @@ function App() {
   const [statusMsg, setStatusMsg] = useState('');
   const [userKeys, setUserKeys] = useState<{ newsKey: string; geminiKey: string } | null>(null);
 
-  // 2. 초기화 이펙트
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -32,11 +30,9 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // 3. 헬퍼 함수 정의
   const fetchKeys = async (currentUser: any) => {
     if (!currentUser) return null; 
     try {
-      // 1차 시도: UID로 문서 찾기
       const userDoc = await getDoc(doc(db, "users", currentUser.uid));
       if (userDoc.exists()) {
         const data = userDoc.data();
@@ -45,7 +41,6 @@ function App() {
         return keys;
       } 
       
-      // 2차 시도: UID로 못 찾을 경우 이메일로 검색 (안전장치)
       const querySnapshot = await getDocs(collection(db, "users"));
       let foundKeys = null;
       querySnapshot.forEach((doc) => {
@@ -65,7 +60,6 @@ function App() {
     return null;
   };
 
-  // 4. 핸들러 함수 정의 (에러 방지를 위해 위로 배치)
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -84,7 +78,6 @@ function App() {
     try {
       let activeKeys = userKeys;
 
-      // 키가 없으면 재시도
       if (!activeKeys || !activeKeys.newsKey) {
         setStatusMsg("System: Retrying credential sync...");
         const fetched = await fetchKeys(user);
@@ -99,19 +92,13 @@ function App() {
       setStatusMsg(`System: Searching GNews for "${keyword}"...`);
       await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // [핵심 수정] CORS 해결을 위해 프록시 경로(/news-api) 사용
-      // 기존: https://gnews.io/api/v4/search?...
-      // 변경: /news-api?...
+      // GNews 프록시 사용
       const newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
       
       const newsResponse = await fetch(newsUrl);
-      
-      if (!newsResponse.ok) {
-        throw new Error(`GNews API Error: ${newsResponse.statusText}`);
-      }
+      if (!newsResponse.ok) throw new Error(`GNews API Error: ${newsResponse.statusText}`);
 
       const newsData = await newsResponse.json();
-
       if (!newsData.articles || newsData.articles.length === 0) {
         throw new Error("No news found for this keyword.");
       }
@@ -123,10 +110,12 @@ function App() {
       }));
       setNewsList(realArticles);
 
+      // --- Gemini 분석 루프 ---
       for (let i = 0; i < realArticles.length; i++) {
         setStatusMsg(`System: AI analyzing article ${i + 1} of ${realArticles.length}...`);
         
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${activeKeys.geminiKey}`;
+        // [수정] 모델명을 'gemini-pro'로 변경하여 호환성 확보
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${activeKeys.geminiKey}`;
         
         const geminiResponse = await fetch(geminiUrl, {
           method: 'POST',
@@ -137,7 +126,14 @@ function App() {
         });
 
         const geminiData = await geminiResponse.json();
-        const summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Analysis unavailable.";
+        
+        let summaryText = "Analysis unavailable.";
+        if (geminiData.candidates && geminiData.candidates.length > 0) {
+            summaryText = geminiData.candidates[0].content?.parts?.[0]?.text || "No text content.";
+        } else if (geminiData.error) {
+            console.error("Gemini API Error:", geminiData.error);
+            summaryText = `AI Error: ${geminiData.error.message}`;
+        }
 
         setNewsList(prev => prev.map((item, idx) => 
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
@@ -162,10 +158,7 @@ function App() {
     doc.save(`Report.pdf`);
   };
 
-  // 5. 조건부 렌더링
-  if (window.location.pathname === '/signup') {
-    return <Signup />;
-  }
+  if (window.location.pathname === '/signup') return <Signup />;
 
   if (!user) {
     return (
@@ -182,12 +175,8 @@ function App() {
     );
   }
 
-  // 관리자 자동 리다이렉트
-  if (user.email === 'admin@test.com') {
-    return <Signup />;
-  }
+  if (user.email === 'admin@test.com') return <Signup />;
 
-  // 6. 메인 대시보드 렌더링
   return (
     <div style={styles.pageContainer}>
       <header style={styles.navBar}>
