@@ -6,6 +6,9 @@ import jsPDF from 'jspdf';
 
 const COOLDOWN_SECONDS = 600; 
 
+// [중요] 최후의 보루: Firebase에서 키를 못 가져오면 이 키를 씁니다.
+const EMERGENCY_GROQ_KEY = "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";
+
 export interface NewsItem {
   title: string;
   link: string;
@@ -54,7 +57,8 @@ export function useNewsIntel() {
     const localKeyData = localStorage.getItem(`api_keys_${currentUser.uid}`);
     if (localKeyData) {
         const parsedKeys = JSON.parse(localKeyData);
-        if (parsedKeys.newsKey && parsedKeys.geminiKey && parsedKeys.fallbackKey) {
+        // DB 키가 있거나, 없어도 일단 로컬에 있는거 씀
+        if (parsedKeys.newsKey && parsedKeys.geminiKey) {
             setUserKeys(parsedKeys);
             return parsedKeys;
         }
@@ -109,7 +113,6 @@ export function useNewsIntel() {
 
       if (capableModels.length === 0) throw new Error("No models found.");
 
-      // 3.0 -> 2.5 -> 2.0 -> 1.5 순서
       let bestModel = capableModels.find((m: any) => m.name.includes("gemini-3.0")) || 
                       capableModels.find((m: any) => m.name.includes("gemini-2.5")) ||
                       capableModels.find((m: any) => m.name.includes("gemini-2.0")) ||
@@ -124,18 +127,22 @@ export function useNewsIntel() {
     }
   };
 
-  const callFallbackAI = async (title: string, fallbackKey: string) => {
-      // Groq 모델 (빠르고 안정적)
-      const targetModel = "mixtral-8x7b-32768"; 
+  // [핵심] 비상용 AI 호출 (3중 안전장치)
+  const callFallbackAI = async (title: string, dbKey?: string) => {
+      // 1. 모델: 제일 빠르고 에러 없는 llama3-8b 선택
+      const targetModel = "llama3-8b-8192"; 
       
+      // 2. 키: DB에 있으면 그거 쓰고, 없으면 코드에 박힌 EMERGENCY_GROQ_KEY 사용
+      const apiKeyToUse = (dbKey && dbKey.length > 10) ? dbKey : EMERGENCY_GROQ_KEY;
+
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000); // Groq는 15초 제한
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10초 제한
 
       try {
           const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
               method: "POST",
               headers: {
-                  "Authorization": `Bearer ${fallbackKey}`, 
+                  "Authorization": `Bearer ${apiKeyToUse}`, 
                   "Content-Type": "application/json"
               },
               body: JSON.stringify({
@@ -152,7 +159,8 @@ export function useNewsIntel() {
 
           if (!response.ok) {
               const errData = await response.json().catch(() => ({}));
-              throw new Error(`Groq Error ${response.status}`);
+              // 에러 발생 시 원인을 정확히 리턴 (화면에 보여주기 위함)
+              throw new Error(`Groq Error ${response.status}: ${errData.error?.message || response.statusText}`);
           }
           
           const data = await response.json();
@@ -171,7 +179,7 @@ export function useNewsIntel() {
 
     try {
       let activeKeys = userKeys;
-      if (!activeKeys?.newsKey || !activeKeys?.fallbackKey) activeKeys = await fetchKeys(user);
+      if (!activeKeys?.newsKey) activeKeys = await fetchKeys(user);
       if (!activeKeys?.newsKey) throw new Error("API Keys missing.");
 
       const foundModel = await detectBestModel(activeKeys.geminiKey);
@@ -234,32 +242,28 @@ export function useNewsIntel() {
                  }
              } else {
                  console.warn(`Gemini Error ${res.status} - Switching to Fallback`);
-                 // 성공 아님 -> 자동으로 catch 블록이나 아래 if(!success)로 넘어감
              }
         } catch(e) { 
-             console.warn("Gemini Failed/Timed out (10s), switching to Fallback...", e);
+             console.warn("Gemini Timeout or Error, switching to Fallback...", e);
         }
 
-        // 2. Gemini 실패 시 -> 즉시 Fallback (Groq) 투입
+        // 2. Gemini 실패 시 -> Fallback (Groq) 투입
         if (!success) {
-            if (activeKeys.fallbackKey) {
-                try {
-                    // 사용자 몰래 백그라운드 전환 (로그만 찍힘)
-                    console.log("⚠️ Executing Fallback Protocol...");
-                    summary = await callFallbackAI(articles[i].title, activeKeys.fallbackKey);
-                    success = true;
-                } catch (fallbackError: any) {
-                    console.error("Fallback Failed:", fallbackError);
-                    summary = `[Analysis Failed] Network or AI Error.`;
-                }
-            } else {
-                summary = "[Analysis Failed] No Backup Key available.";
+            try {
+                console.log("⚠️ Executing Fallback Protocol (Groq)...");
+                // DB 키가 있으면 쓰고, 없으면 undefined가 들어가서 내부적으로 EMERGENCY_KEY를 씀
+                summary = await callFallbackAI(articles[i].title, activeKeys.fallbackKey || "");
+                success = true;
+            } catch (fallbackError: any) {
+                console.error("Fallback Failed:", fallbackError);
+                // 화면에 에러 원인 출력
+                summary = `[System Failure] Backup Error: ${fallbackError.message}`;
             }
         }
         
         setNewsList(prev => prev.map((item, idx) => idx === i ? { ...item, summary, isAnalyzing: false } : item));
         
-        // [수정] 1초 ~ 5초 사이 랜덤 대기
+        // 1초 ~ 5초 사이 랜덤 대기
         const delay = Math.floor(Math.random() * (5000 - 1000 + 1) + 1000);
         await new Promise(r => setTimeout(r, delay));
       }
