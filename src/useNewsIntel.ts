@@ -6,8 +6,6 @@ import jsPDF from 'jspdf';
 
 const COOLDOWN_SECONDS = 600; 
 
-// [변경] 하드코딩된 키 삭제됨. 이제 DB에서 가져옵니다.
-
 export interface NewsItem {
   title: string;
   link: string;
@@ -27,7 +25,6 @@ export function useNewsIntel() {
   const [isFinished, setIsFinished] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   
-  // [변경] fallbackKey가 포함된 상태 정의
   const [userKeys, setUserKeys] = useState<{ newsKey: string; geminiKey: string; fallbackKey?: string } | null>(null);
   
   const [showModal, setShowModal] = useState(false);
@@ -51,17 +48,23 @@ export function useNewsIntel() {
     return () => clearInterval(timer);
   }, [cooldown]);
 
+  // [수정된 부분] 로컬 스토리지 검사 로직 강화
   const fetchKeys = async (currentUser: any) => {
     if (!currentUser) return null; 
+    
     const localKeyData = localStorage.getItem(`api_keys_${currentUser.uid}`);
     if (localKeyData) {
         const parsedKeys = JSON.parse(localKeyData);
-        // 로컬 스토리지에 fallbackKey가 있는지 확인
-        if (parsedKeys.newsKey && parsedKeys.geminiKey) {
+        // [중요 변경] fallbackKey까지 있는지 확인! 없으면 DB 다시 조회
+        if (parsedKeys.newsKey && parsedKeys.geminiKey && parsedKeys.fallbackKey) {
+            console.log("✅ Loaded ALL keys (including fallback) from Local Storage");
             setUserKeys(parsedKeys);
             return parsedKeys;
+        } else {
+            console.log("⚠️ Local keys incomplete. Fetching from DB...");
         }
     }
+
     try {
         const userDoc = await getDoc(doc(db, "users", currentUser.uid));
         let keys = null;
@@ -72,7 +75,6 @@ export function useNewsIntel() {
         }
         
         if (keys) {
-             // [변경] DB에서 fallbackKey도 같이 가져옴
              const mappedKeys = { 
                  newsKey: keys.newsKey || "", 
                  geminiKey: keys.geminiKey || "",
@@ -126,15 +128,13 @@ export function useNewsIntel() {
     }
   };
 
-  // [수정] DB에서 가져온 키를 인자로 받도록 변경
   const callFallbackAI = async (title: string, fallbackKey: string) => {
-      // Groq 모델명 최신화 (안정성)
       const targetModel = "mixtral-8x7b-32768"; 
       
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
           headers: {
-              "Authorization": `Bearer ${fallbackKey}`, // DB에서 가져온 키 사용
+              "Authorization": `Bearer ${fallbackKey}`, 
               "Content-Type": "application/json"
           },
           body: JSON.stringify({
@@ -163,8 +163,8 @@ export function useNewsIntel() {
 
     try {
       let activeKeys = userKeys;
-      // 키가 없으면 DB에서 다시 당겨옴
-      if (!activeKeys?.newsKey) activeKeys = await fetchKeys(user);
+      // [수정] 키 가져올 때 fallbackKey 확인
+      if (!activeKeys?.newsKey || !activeKeys?.fallbackKey) activeKeys = await fetchKeys(user);
       if (!activeKeys?.newsKey) throw new Error("API Keys missing.");
 
       const foundModel = await detectBestModel(activeKeys.geminiKey);
@@ -228,9 +228,8 @@ export function useNewsIntel() {
              }
         }
 
-        // 2. Gemini 실패 시 -> Fallback (Groq) 투입 (DB 키 사용)
+        // 2. Fallback
         if (!success) {
-            // [중요] DB에 fallbackKey가 있을 때만 실행
             if (activeKeys.fallbackKey) {
                 try {
                     console.log("⚠️ Switching to Fallback AI...");
@@ -241,7 +240,6 @@ export function useNewsIntel() {
                     summary = `[System Failure] Gemini & Backup AI both failed.`;
                 }
             } else {
-                // DB에 키가 없으면
                 summary = "Analysis Unavailable (Gemini Failed & No Backup Key in DB)";
             }
         }
