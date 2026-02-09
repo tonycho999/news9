@@ -92,7 +92,6 @@ function App() {
       setStatusMsg(`System: Searching GNews for "${keyword}"...`);
       await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // GNews 프록시 사용
       const newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
       
       const newsResponse = await fetch(newsUrl);
@@ -110,12 +109,11 @@ function App() {
       }));
       setNewsList(realArticles);
 
-      // --- Gemini 분석 루프 ---
       for (let i = 0; i < realArticles.length; i++) {
         setStatusMsg(`System: AI analyzing article ${i + 1} of ${realArticles.length}...`);
         
-        // [수정] 모델명을 'gemini-pro'로 변경하여 호환성 확보
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${activeKeys.geminiKey}`;
+        // [수정] 최신 표준 모델명인 'gemini-1.5-flash'로 변경
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${activeKeys.geminiKey}`;
         
         const geminiResponse = await fetch(geminiUrl, {
           method: 'POST',
@@ -132,6 +130,7 @@ function App() {
             summaryText = geminiData.candidates[0].content?.parts?.[0]?.text || "No text content.";
         } else if (geminiData.error) {
             console.error("Gemini API Error:", geminiData.error);
+            // 에러 메시지를 화면에 조금 더 자세히 보여줌
             summaryText = `AI Error: ${geminiData.error.message}`;
         }
 
