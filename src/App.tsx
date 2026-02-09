@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db } from './firebase'; 
 import { onAuthStateChanged, signOut, signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, getDoc, collection, getDocs } from 'firebase/firestore'; 
+import { doc, getDoc, collection, getDocs, updateDoc } from 'firebase/firestore'; 
 import jsPDF from 'jspdf';
 import Signup from './Signup';
 
@@ -60,6 +60,22 @@ function App() {
     return null;
   };
 
+  const updateGeminiKey = async () => {
+    const newKey = prompt("⚠️ Gemini API Key Error!\n\nThe current key is invalid or lacks permission.\nPlease paste a new Gemini Key from 'aistudio.google.com':");
+    if (newKey && user) {
+        try {
+            await updateDoc(doc(db, "users", user.uid), {
+                geminiKey: newKey
+            });
+            alert("✅ Key updated! analyzing will restart.");
+            setUserKeys(prev => prev ? { ...prev, geminiKey: newKey } : null);
+            startAnalysis(); 
+        } catch (e) {
+            alert("Failed to update key in DB.");
+        }
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -79,27 +95,24 @@ function App() {
       let activeKeys = userKeys;
 
       if (!activeKeys || !activeKeys.newsKey) {
-        setStatusMsg("System: Retrying credential sync...");
+        setStatusMsg("System: Synchronizing credentials...");
         const fetched = await fetchKeys(user);
         if (!fetched || !fetched.newsKey) {
-          throw new Error("Critical Error: API Keys not found. Contact admin.");
+          throw new Error("Critical Error: API Keys not found.");
         }
         activeKeys = fetched;
       }
-
-      if (!activeKeys?.newsKey) throw new Error("Intelligence Error: API Key missing.");
 
       setStatusMsg(`System: Searching GNews for "${keyword}"...`);
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       const newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
-      
       const newsResponse = await fetch(newsUrl);
       if (!newsResponse.ok) throw new Error(`GNews API Error: ${newsResponse.statusText}`);
 
       const newsData = await newsResponse.json();
       if (!newsData.articles || newsData.articles.length === 0) {
-        throw new Error("No news found for this keyword.");
+        throw new Error("No news found.");
       }
 
       const realArticles: NewsItem[] = newsData.articles.map((art: any) => ({
@@ -109,40 +122,43 @@ function App() {
       }));
       setNewsList(realArticles);
 
+      // [핵심 변경] Gemini 루프: 분석 완료 즉시 반영
       for (let i = 0; i < realArticles.length; i++) {
-        setStatusMsg(`System: AI analyzing article ${i + 1} of ${realArticles.length}...`);
+        setStatusMsg(`System: Analyzing article ${i + 1} of ${realArticles.length}...`);
         
-        // [수정] 최신 표준 모델명인 'gemini-1.5-flash'로 변경
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${activeKeys.geminiKey}`;
         
         const geminiResponse = await fetch(geminiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: `Summarize this news article for a professional reporter in 3 sentences: ${realArticles[i].title}` }] }]
+            contents: [{ parts: [{ text: `Act as a professional reporter. Summarize this news title in 3 sentences with context: "${realArticles[i].title}"` }] }]
           })
         });
 
-        const geminiData = await geminiResponse.json();
-        
-        let summaryText = "Analysis unavailable.";
-        if (geminiData.candidates && geminiData.candidates.length > 0) {
-            summaryText = geminiData.candidates[0].content?.parts?.[0]?.text || "No text content.";
-        } else if (geminiData.error) {
-            console.error("Gemini API Error:", geminiData.error);
-            // 에러 메시지를 화면에 조금 더 자세히 보여줌
-            summaryText = `AI Error: ${geminiData.error.message}`;
+        if (geminiResponse.status === 404 || geminiResponse.status === 400) {
+            const errData = await geminiResponse.json();
+            console.error("Gemini Error:", errData);
+            if (window.confirm(`Gemini Error: ${errData.error?.message}\n\nUpdate API Key?`)) {
+                await updateGeminiKey();
+                return; 
+            }
         }
 
+        const geminiData = await geminiResponse.json();
+        const summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Deep analysis unavailable.";
+
+        // [핵심] 여기서 데이터를 받자마자 화면을 업데이트합니다.
         setNewsList(prev => prev.map((item, idx) => 
           idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item
         ));
         
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // [안전 장치] 연속 호출 에러 방지를 위해 딱 1초만 대기 (속도와 안정성 타협)
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
 
       setIsFinished(true);
-      setStatusMsg('System: Analysis Complete.');
+      setStatusMsg('System: All Intelligence Gathered.');
 
     } catch (error: any) {
       console.error(error);
