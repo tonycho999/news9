@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { auth, db } from './firebase'; // db 추가
+import { auth, db } from './firebase'; 
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore'; // Firestore 저장 함수 추가
+import { doc, setDoc } from 'firebase/firestore'; 
 
 function Signup() {
   const [formData, setFormData] = useState({
@@ -9,8 +9,8 @@ function Signup() {
     email: '',
     password: '',
     confirmPassword: '',
-    apiKey1: '',
-    apiKey2: ''
+    apiKey1: '', 
+    apiKey2: '' 
   });
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -20,36 +20,41 @@ function Signup() {
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // [진단 1] 버튼이 눌렸는지 확인
+    console.log("Signup process started..."); 
+
     if (formData.password !== formData.confirmPassword) {
       return alert("Passwords do not match!");
     }
 
     try {
-      // 1. Firebase 인증 계정 생성 (로그인용)
+      // [진단 2] Firebase 인증 연결 시도
+      console.log("Attempting to create user in Auth...");
       const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
       const user = userCredential.user;
       
-      console.log("Auth Account Created:", user.uid);
+      console.log("Auth Success! User UID:", user.uid); // 이게 안 뜨면 Auth 문제
 
-      // 2. Firestore 데이터베이스에 유저 정보 및 API Key 저장 (필수 단계)
-      // App.tsx가 읽어갈 수 있도록 필드명을 newsKey, geminiKey로 매핑하여 저장합니다.
+      // [진단 3] Firestore 저장 시도
+      console.log("Attempting to save to Firestore...");
       await setDoc(doc(db, "users", user.uid), {
         username: formData.username,
         email: formData.email,
-        newsKey: formData.apiKey1,   // apiKey1 입력값을 newsKey로 저장
-        geminiKey: formData.apiKey2, // apiKey2 입력값을 geminiKey로 저장
+        newsKey: formData.apiKey1,   
+        geminiKey: formData.apiKey2, 
         createdAt: new Date().toISOString(),
         role: 'reporter'
       });
 
-      alert(`User ${formData.username} created successfully! API Keys are saved to database.`);
-      
-      // 가입 성공 시 메인 화면으로 이동 (자동 로그인 됨)
+      console.log("Firestore Save Success!"); // 이게 안 뜨면 DB 문제
+      alert(`User ${formData.username} created successfully!`);
       window.location.href = '/';
 
     } catch (error: any) {
-      console.error("Signup Error:", error);
-      alert("Error creating account: " + error.message);
+      // [진단 4] 에러 발생 시 상세 내용 출력
+      console.error("CRITICAL ERROR:", error);
+      // 에러 메시지를 화면에 띄워서 알려줌
+      alert("Registration Failed:\n" + error.message);
     }
   };
 
@@ -58,7 +63,7 @@ function Signup() {
       <div style={styles.card}>
         <h2 style={{ marginBottom: '20px', color: '#2c3e50' }}>Create New Intelligence Account</h2>
         <form onSubmit={handleSignup} style={styles.form}>
-          <label style={styles.label}>Reporter Name (Username)</label>
+          <label style={styles.label}>Reporter Name</label>
           <input name="username" placeholder="Full Name" onChange={handleChange} style={styles.input} required />
           
           <label style={styles.label}>Official Email</label>
@@ -77,10 +82,10 @@ function Signup() {
 
           <hr style={{ margin: '20px 0', border: '0.5px solid #eee' }} />
 
-          <label style={styles.label}>Intelligence API Key 1 (News Access)</label>
+          <label style={styles.label}>Intelligence API Key 1 (News)</label>
           <input name="apiKey1" placeholder="Enter GNews Key" onChange={handleChange} style={styles.input} required />
 
-          <label style={styles.label}>Intelligence API Key 2 (AI Analysis)</label>
+          <label style={styles.label}>Intelligence API Key 2 (Gemini)</label>
           <input name="apiKey2" placeholder="Enter Gemini Key" onChange={handleChange} style={styles.input} required />
 
           <button type="submit" style={styles.submitBtn}>REGISTER ACCOUNT</button>
