@@ -30,7 +30,7 @@ function App() {
   const [finalReport, setFinalReport] = useState('');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
 
-  // [신규] 쿨다운 상태
+  // 쿨다운 상태
   const [cooldown, setCooldown] = useState(0);
 
   useEffect(() => {
@@ -41,9 +41,9 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // [신규] 쿨다운 타이머 로직
+  // [수정] 빌드 에러 해결: NodeJS.Timeout -> any 로 변경
   useEffect(() => {
-    let timer: NodeJS.Timeout;
+    let timer: any; 
     if (cooldown > 0) {
       timer = setInterval(() => {
         setCooldown((prev) => prev - 1);
@@ -143,10 +143,9 @@ function App() {
 
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
-    // 쿨다운 중이면 실행 막음
     if (cooldown > 0) return;
 
-    // [신규] 분석 시작 시 쿨다운 가동
+    // 분석 시작 시 쿨다운 가동
     setCooldown(COOLDOWN_SECONDS);
 
     setIsFinished(false);
@@ -238,7 +237,6 @@ function App() {
     } catch (error: any) {
       console.error(error);
       setStatusMsg(`System Alert: ${error.message}`);
-      // 에러 나면 쿨다운 해제할지 결정 (여기선 에러나도 API 썼으니 유지)
     }
   };
 
@@ -339,7 +337,6 @@ function App() {
         <div style={styles.searchSection}>
           <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="Topic..." style={{ ...styles.input, flex: 1 }} />
           
-          {/* [수정] 쿨다운 상태에 따른 버튼 스타일 변경 */}
           <button 
             onClick={startAnalysis} 
             style={cooldown > 0 ? styles.disabledBtn : styles.mainBtn}
@@ -414,7 +411,6 @@ const styles: { [key: string]: React.CSSProperties } = {
   hStack: { display: 'flex', alignItems: 'center', gap: '10px' },
   input: { padding: '10px', border: '1px solid #ccc', borderRadius: '4px' },
   mainBtn: { padding: '10px 20px', backgroundColor: '#2c3e50', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', minWidth: '150px' },
-  // [신규] 비활성화 버튼 스타일
   disabledBtn: { padding: '10px 20px', backgroundColor: '#95a5a6', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'not-allowed', minWidth: '150px' },
   logoutBtn: { padding: '5px 10px', cursor: 'pointer' },
   searchSection: { display: 'flex', gap: '10px', marginBottom: '20px' },
