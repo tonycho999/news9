@@ -13,6 +13,7 @@ interface NewsItem {
 }
 
 function App() {
+  // 1. 상태(State) 선언
   const [user, setUser] = useState<any>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -20,10 +21,9 @@ function App() {
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
   const [isFinished, setIsFinished] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
-  
-  // 초기값 null 설정
   const [userKeys, setUserKeys] = useState<{ newsKey: string; geminiKey: string } | null>(null);
 
+  // 2. 초기화 이펙트
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -32,11 +32,10 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // 키 가져오기 함수 (안전장치 유지)
+  // 3. 헬퍼 함수 정의
   const fetchKeys = async (currentUser: any) => {
     if (!currentUser) return null; 
     try {
-      // 1. UID로 검색
       const userDoc = await getDoc(doc(db, "users", currentUser.uid));
       if (userDoc.exists()) {
         const data = userDoc.data();
@@ -45,7 +44,6 @@ function App() {
         return keys;
       } 
       
-      // 2. 이메일로 검색
       const querySnapshot = await getDocs(collection(db, "users"));
       let foundKeys = null;
       querySnapshot.forEach((doc) => {
@@ -65,33 +63,7 @@ function App() {
     return null;
   };
 
-  // [라우팅 1] URL이 /signup 이면 가입 화면 표시
-  if (window.location.pathname === '/signup') {
-    return <Signup />;
-  }
-
-  // [라우팅 2] 로그인 화면 표시 (유저가 없을 때)
-  if (!user) {
-    return (
-      <div style={styles.loginOverlay}>
-        <div style={styles.loginCard}>
-          <h2 style={{ color: '#2c3e50' }}>Intelligence Login</h2>
-          <form onSubmit={handleLogin} style={styles.vStack}>
-            <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} style={styles.input} required />
-            <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} style={styles.input} required />
-            <button type="submit" style={styles.mainBtn}>Sign In</button>
-          </form>
-        </div>
-      </div>
-    );
-  }
-
-  // [라우팅 3] 관리자(admin@test.com) 자동 리다이렉트 (핵심 수정)
-  // 관리자로 로그인하면 대시보드가 아닌 가입 페이지(Signup)를 즉시 보여줍니다.
-  if (user.email === 'admin@test.com') {
-    return <Signup />;
-  }
-
+  // 4. 핸들러 함수 정의 (이 위치로 끌어올림!)
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -101,7 +73,6 @@ function App() {
     }
   };
 
-  // --- 핵심 기능: 키가 없으면 실행을 멈추는 철벽 로직 ---
   const startAnalysis = async () => {
     if (!keyword) return alert("Please enter a topic.");
     
@@ -109,24 +80,19 @@ function App() {
     setNewsList([]); 
 
     try {
-      // [1단계] 키 확보
       let activeKeys = userKeys;
 
       if (!activeKeys || !activeKeys.newsKey) {
         setStatusMsg("System: Retrying credential sync...");
         const fetched = await fetchKeys(user);
-        
         if (!fetched || !fetched.newsKey) {
-          throw new Error("Critical Error: API Keys not found in database. Please contact admin.");
+          throw new Error("Critical Error: API Keys not found. Contact admin.");
         }
         activeKeys = fetched;
       }
 
-      if (!activeKeys?.newsKey) {
-        throw new Error("Intelligence Error: API Key is missing.");
-      }
+      if (!activeKeys?.newsKey) throw new Error("Intelligence Error: API Key missing.");
 
-      // [2단계] GNews 검색
       setStatusMsg(`System: Searching GNews for "${keyword}"...`);
       await new Promise(resolve => setTimeout(resolve, 1000));
 
@@ -145,7 +111,6 @@ function App() {
       }));
       setNewsList(realArticles);
 
-      // [3단계] Gemini 요약
       for (let i = 0; i < realArticles.length; i++) {
         setStatusMsg(`System: AI analyzing article ${i + 1} of ${realArticles.length}...`);
         
@@ -185,7 +150,32 @@ function App() {
     doc.save(`Report.pdf`);
   };
 
-  // --- Main Dashboard View (일반 기자용) ---
+  // 5. 조건부 렌더링 (함수 정의 이후에 위치해야 함)
+  if (window.location.pathname === '/signup') {
+    return <Signup />;
+  }
+
+  if (!user) {
+    return (
+      <div style={styles.loginOverlay}>
+        <div style={styles.loginCard}>
+          <h2 style={{ color: '#2c3e50' }}>Intelligence Login</h2>
+          <form onSubmit={handleLogin} style={styles.vStack}>
+            <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} style={styles.input} required />
+            <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} style={styles.input} required />
+            <button type="submit" style={styles.mainBtn}>Sign In</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // 관리자 자동 리다이렉트
+  if (user.email === 'admin@test.com') {
+    return <Signup />;
+  }
+
+  // 6. 메인 대시보드 렌더링
   return (
     <div style={styles.pageContainer}>
       <header style={styles.navBar}>
