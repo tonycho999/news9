@@ -5,7 +5,7 @@ import { doc, getDoc, collection, getDocs, updateDoc } from 'firebase/firestore'
 import jsPDF from 'jspdf';
 import Signup from './Signup';
 
-// [설정 1] 쿨타임 10분 (600초)
+// [설정 1] 쿨타임 10분
 const COOLDOWN_SECONDS = 600; 
 
 interface NewsItem {
@@ -20,9 +20,12 @@ function App() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   
-  // [설정 2] 날짜 선택 상태 (기본값: 오늘)
-  const getTodayString = () => new Date().toISOString().split('T')[0];
-  const [targetDate, setTargetDate] = useState(getTodayString());
+  // [핵심 변경] 필리핀 시간(UTC+8) 기준으로 오늘 날짜 가져오기
+  const getTodayPHT = () => {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+  };
+
+  const [targetDate, setTargetDate] = useState(getTodayPHT());
   
   const [keyword, setKeyword] = useState('');
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
@@ -43,7 +46,6 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // 쿨다운 타이머
   useEffect(() => {
     let timer: any; 
     if (cooldown > 0) {
@@ -145,7 +147,6 @@ function App() {
     if (!keyword) return alert("Please enter a topic.");
     if (cooldown > 0) return;
 
-    // 일단 쿨타임 시작 (성공할 거라 가정)
     setCooldown(COOLDOWN_SECONDS);
     
     setIsFinished(false);
@@ -168,22 +169,25 @@ function App() {
           if (!targetModel.startsWith('models/')) targetModel = `models/${targetModel}`;
       } catch (e) {}
 
-      setStatusMsg(`System: Searching GNews for "${keyword}" on ${targetDate}...`);
+      setStatusMsg(`System: Searching GNews for "${keyword}" on ${targetDate} (PH Time)...`);
       
-      const fromDate = `${targetDate}T00:00:00Z`;
-      const toDate = `${targetDate}T23:59:59Z`;
+      // [핵심 변경] 필리핀 시간(UTC+8)을 명시적으로 요청에 포함
+      // GNews는 ISO 8601 형식을 지원하므로 오프셋(+08:00)을 붙여서 보냄
+      const fromDate = `${targetDate}T00:00:00+08:00`;
+      const toDate = `${targetDate}T23:59:59+08:00`;
       
-      const newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=100&from=${fromDate}&to=${toDate}&token=${activeKeys.newsKey}`;
+      // [수정] max=100 설정 (GNews 무료 최대치), fallback 로직 제거 (정직하게 검색)
+      const newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=100&from=${encodeURIComponent(fromDate)}&to=${encodeURIComponent(toDate)}&token=${activeKeys.newsKey}`;
       
       const newsResponse = await fetch(newsUrl);
       if (!newsResponse.ok) throw new Error(`GNews API Error: ${newsResponse.statusText}`);
       
       const newsData = await newsResponse.json();
       
-      // [핵심 수정] 뉴스가 없으면 쿨타임 즉시 해제 (0으로 초기화)
+      // 결과가 없으면 솔직하게 에러 처리하고 쿨타임 해제
       if (!newsData.articles || newsData.articles.length === 0) {
         setCooldown(0); 
-        throw new Error(`No news found on ${targetDate}.`);
+        throw new Error(`No news found for "${keyword}" on ${targetDate} (PH Time).`);
       }
 
       const realArticles: NewsItem[] = newsData.articles.map((art: any) => ({
@@ -256,7 +260,6 @@ function App() {
       console.error(error);
       setStatusMsg(`System Alert: ${error.message}`);
       document.title = "Analysis Error";
-      // 참고: 에러가 나더라도 'No news'가 아닌 다른 에러면 쿨타임은 유지됨 (API 보호 목적)
     }
   };
 
@@ -270,7 +273,7 @@ function App() {
 
     try {
         const allSummaries = newsList.map(n => `- ${n.title}: ${n.summary}`).join("\n");
-        const prompt = `Based on the following news summaries about "${keyword}" on ${targetDate}, write a comprehensive executive briefing.
+        const prompt = `Based on the following news summaries about "${keyword}" on ${targetDate} (PH Time), write a comprehensive executive briefing.
         Structure it with:
         1. Key Trends (What is happening overall?)
         2. Major Details (Important facts)
@@ -357,7 +360,7 @@ function App() {
           <input 
             type="date" 
             value={targetDate} 
-            max={getTodayString()} 
+            max={getTodayPHT()} 
             onChange={(e) => setTargetDate(e.target.value)} 
             style={styles.dateInput} 
           />
