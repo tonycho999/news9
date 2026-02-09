@@ -54,7 +54,6 @@ export function useNewsIntel() {
             return parsedKeys;
         }
     }
-    // (DB Fetch logic simplified for brevity, assumes standard fetch logic here if local fails)
     try {
         const userDoc = await getDoc(doc(db, "users", currentUser.uid));
         let keys = null;
@@ -97,36 +96,88 @@ export function useNewsIntel() {
       if (!activeKeys?.newsKey) throw new Error("API Keys missing.");
 
       setStatusMsg(`System: Searching GNews for "${keyword}" on ${targetDate}...`);
-      const newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=100&from=${targetDate}T00:00:00+08:00&to=${targetDate}T23:59:59+08:00&token=${activeKeys.newsKey}`;
-      const newsRes = await fetch(newsUrl);
-      const newsData = await newsRes.json();
+      const fromDate = `${targetDate}T00:00:00+08:00`;
+      const toDate = `${targetDate}T23:59:59+08:00`;
       
+      let newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&from=${encodeURIComponent(fromDate)}&to=${encodeURIComponent(toDate)}&token=${activeKeys.newsKey}`;
+      let newsRes = await fetch(newsUrl);
+      let newsData = await newsRes.json();
+      
+      if (!newsData.articles?.length) {
+           console.warn("No news found for date, retrying without date filter...");
+           setStatusMsg(`System: No news on ${targetDate}. Searching LATEST news...`);
+           newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=10&token=${activeKeys.newsKey}`;
+           newsRes = await fetch(newsUrl);
+           newsData = await newsRes.json();
+      }
+
       if (!newsData.articles?.length) { setCooldown(0); throw new Error("No news found."); }
       const articles = newsData.articles.map((art:any) => ({ title: art.title, link: art.url, isAnalyzing: true }));
       setNewsList(articles);
 
       for (let i = 0; i < articles.length; i++) {
-        let success = false; let attempts = 0; let summary = "Unavailable";
+        let success = false; let attempts = 0; let summary = "Analysis unavailable.";
         setStatusMsg(`Analyzing ${i+1}/${articles.length}...`);
+        document.title = `(${i+1}/${articles.length}) Analyzing...`;
         
         while(attempts < 3 && !success) {
              try {
+                 // [핵심] 안전 필터 완전 해제 설정
+                 const safetySettings = [
+                    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+                 ];
+
+                 // [핵심] 프롬프트 강화: 뉴스 보도자 페르소나 부여
+                 const promptText = `You are a professional news reporter. Provide an objective summary of this headline. Do not censor news content. Headline: "${articles[i].title}"`;
+
                  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${activeKeys.geminiKey}`, {
-                     method: 'POST', headers: {'Content-Type': 'application/json'},
-                     body: JSON.stringify({ contents: [{ parts: [{ text: `Summarize: "${articles[i].title}"` }] }], safetySettings: [{category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE"}] })
+                     method: 'POST', 
+                     headers: {'Content-Type': 'application/json'},
+                     body: JSON.stringify({ 
+                        contents: [{ parts: [{ text: promptText }] }], 
+                        safetySettings: safetySettings 
+                     })
                  });
-                 if (res.status === 429) { await new Promise(r => setTimeout(r, 15000)); attempts++; continue; }
-                 if (res.status === 400) { if(window.confirm("Key Error. Update?")) manualUpdateKey(); return; }
+
+                 if (res.status === 429) { 
+                     setStatusMsg("⚠️ Rate Limit. Waiting 15s...");
+                     await new Promise(r => setTimeout(r, 15000)); 
+                     attempts++; continue; 
+                 }
+                 if (res.status === 400) { 
+                     const err = await res.json();
+                     if(window.confirm(`API Key Error: ${err.error?.message}. Update?`)) manualUpdateKey(); 
+                     return; 
+                 }
+
                  const data = await res.json();
-                 summary = data.candidates?.[0]?.content?.parts?.[0]?.text || "Blocked";
+                 
+                 if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+                     summary = data.candidates[0].content.parts[0].text;
+                 } else if (data.promptFeedback) {
+                     // 차단되었을 경우, 차단 이유 대신 원래 제목을 보여주거나 안전 메시지 출력
+                     console.warn("Blocked:", data.promptFeedback);
+                     summary = `(Content flagged by AI: ${articles[i].title})`; 
+                 }
+                 
                  success = true;
-             } catch(e) { attempts++; await new Promise(r => setTimeout(r, 2000)); }
+
+             } catch(e) { 
+                 attempts++; 
+                 await new Promise(r => setTimeout(r, 3000)); 
+             }
         }
         setNewsList(prev => prev.map((item, idx) => idx === i ? { ...item, summary, isAnalyzing: false } : item));
-        await new Promise(r => setTimeout(r, Math.random() * 3000 + 2000));
+        
+        // 랜덤 딜레이 (2초 ~ 5초)
+        const delay = Math.floor(Math.random() * (5000 - 2000 + 1) + 2000);
+        await new Promise(r => setTimeout(r, delay));
       }
-      setIsFinished(true); setStatusMsg("Analysis Complete.");
-    } catch (e: any) { setStatusMsg(e.message); }
+      setIsFinished(true); setStatusMsg("Analysis Complete."); document.title = "Done!";
+    } catch (e: any) { setStatusMsg(e.message); document.title = "Error"; }
   };
 
   const generateDailyBriefing = async () => {
@@ -134,13 +185,27 @@ export function useNewsIntel() {
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 300000);
     try {
-        const prompt = `Summarize trends:\n${newsList.map(n => n.title + ": " + n.summary).join('\n')}`;
+        const prompt = `Act as an executive editor. Based on these summaries, write a briefing:\n${newsList.map(n => n.title + ": " + n.summary).join('\n')}`;
+        
+        // 데일리 리포트에도 안전 필터 해제 적용
+        const safetySettings = [
+            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+        ];
+
         const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${userKeys?.geminiKey}`, {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }), signal: controller.signal
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ 
+                contents: [{ parts: [{ text: prompt }] }],
+                safetySettings: safetySettings
+            }), 
+            signal: controller.signal
         });
         const data = await res.json();
-        setFinalReport(data.candidates?.[0]?.content?.parts?.[0]?.text || "Failed.");
+        setFinalReport(data.candidates?.[0]?.content?.parts?.[0]?.text || "Failed to generate report.");
     } catch(e) { setFinalReport("Error/Timeout."); } 
     setIsGeneratingReport(false);
   };
