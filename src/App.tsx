@@ -20,13 +20,12 @@ function App() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   
-  // [핵심 변경] 필리핀 시간(UTC+8) 기준으로 오늘 날짜 가져오기
+  // 필리핀 시간 기준 날짜
   const getTodayPHT = () => {
     return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
   };
 
   const [targetDate, setTargetDate] = useState(getTodayPHT());
-  
   const [keyword, setKeyword] = useState('');
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
   const [isFinished, setIsFinished] = useState(false);
@@ -148,7 +147,6 @@ function App() {
     if (cooldown > 0) return;
 
     setCooldown(COOLDOWN_SECONDS);
-    
     setIsFinished(false);
     setShowModal(false);
     setNewsList([]); 
@@ -171,12 +169,9 @@ function App() {
 
       setStatusMsg(`System: Searching GNews for "${keyword}" on ${targetDate} (PH Time)...`);
       
-      // [핵심 변경] 필리핀 시간(UTC+8)을 명시적으로 요청에 포함
-      // GNews는 ISO 8601 형식을 지원하므로 오프셋(+08:00)을 붙여서 보냄
       const fromDate = `${targetDate}T00:00:00+08:00`;
       const toDate = `${targetDate}T23:59:59+08:00`;
       
-      // [수정] max=100 설정 (GNews 무료 최대치), fallback 로직 제거 (정직하게 검색)
       const newsUrl = `/news-api?q=${encodeURIComponent(keyword)}&country=ph&lang=en&max=100&from=${encodeURIComponent(fromDate)}&to=${encodeURIComponent(toDate)}&token=${activeKeys.newsKey}`;
       
       const newsResponse = await fetch(newsUrl);
@@ -184,7 +179,6 @@ function App() {
       
       const newsData = await newsResponse.json();
       
-      // 결과가 없으면 솔직하게 에러 처리하고 쿨타임 해제
       if (!newsData.articles || newsData.articles.length === 0) {
         setCooldown(0); 
         throw new Error(`No news found for "${keyword}" on ${targetDate} (PH Time).`);
@@ -210,17 +204,27 @@ function App() {
             try {
                 const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel}:generateContent?key=${activeKeys.geminiKey}`;
                 
+                // [핵심 해결 1] 안전 필터(Safety Settings) 강제 해제 설정 추가
+                // 뉴스는 범죄/폭력 내용을 포함하므로 이를 차단하지 않도록 설정
+                const requestBody = {
+                    contents: [{ parts: [{ text: `Summarize this news title in 3 sentences: "${realArticles[i].title}"` }] }],
+                    safetySettings: [
+                        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+                    ]
+                };
+
                 const geminiResponse = await fetch(geminiUrl, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    contents: [{ parts: [{ text: `Summarize this news title in 3 sentences: "${realArticles[i].title}"` }] }]
-                  })
+                  body: JSON.stringify(requestBody)
                 });
 
                 if (geminiResponse.status === 429) {
-                    setStatusMsg(`⚠️ Rate Limit Hit. Cooling down for 10s...`);
-                    await new Promise(resolve => setTimeout(resolve, 10000));
+                    setStatusMsg(`⚠️ Rate Limit Hit. Cooling down for 15s...`);
+                    await new Promise(resolve => setTimeout(resolve, 15000)); // 429 뜨면 15초 쉼
                     attempts++;
                     continue; 
                 }
@@ -237,8 +241,18 @@ function App() {
                 }
 
                 const geminiData = await geminiResponse.json();
-                summaryText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Analysis unavailable.";
-                success = true;
+                
+                // [핵심 디버깅] 만약 내용이 없으면 필터에 걸린 것인지 확인
+                if (geminiData.candidates?.[0]?.content?.parts?.[0]?.text) {
+                    summaryText = geminiData.candidates[0].content.parts[0].text;
+                    success = true;
+                } else if (geminiData.promptFeedback?.blockReason) {
+                    summaryText = `[Blocked by AI Safety: ${geminiData.promptFeedback.blockReason}]`;
+                    success = true; // 차단도 일종의 응답이므로 성공 처리 (재시도 안함)
+                } else {
+                    summaryText = "Analysis unavailable (Unknown Reason).";
+                    success = true; 
+                }
 
             } catch (error) {
                 attempts++;
@@ -248,7 +262,15 @@ function App() {
 
         setNewsList(prev => prev.map((item, idx) => idx === i ? { ...item, summary: summaryText, isAnalyzing: false } : item));
         
-        const randomDelay = Math.floor(Math.random() * (5000 - 2000 + 1) + 2000);
+        // [핵심 해결 2] 정밀 랜덤 딜레이 (2000ms ~ 5000ms)
+        // Math.random()은 소수점까지 나오므로 정말 불규칙한 시간(예: 3127ms)을 생성함
+        const minDelay = 2000;
+        const maxDelay = 5000;
+        const randomDelay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+        
+        // 콘솔에 딜레이 시간 출력 (확인용)
+        console.log(`Waiting for ${randomDelay}ms before next article...`);
+        
         await new Promise(resolve => setTimeout(resolve, randomDelay));
       }
 
@@ -285,11 +307,18 @@ function App() {
         let targetModel = "models/gemini-1.5-flash"; 
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel}:generateContent?key=${userKeys?.geminiKey}`;
         
+        // 여기도 안전 필터 해제 적용
         const response = await fetch(geminiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }]
+              contents: [{ parts: [{ text: prompt }] }],
+              safetySettings: [
+                { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+              ]
             }),
             signal: controller.signal 
         });
