@@ -48,20 +48,15 @@ export function useNewsIntel() {
     return () => clearInterval(timer);
   }, [cooldown]);
 
-  // [수정된 부분] 로컬 스토리지 검사 로직 강화
   const fetchKeys = async (currentUser: any) => {
     if (!currentUser) return null; 
     
     const localKeyData = localStorage.getItem(`api_keys_${currentUser.uid}`);
     if (localKeyData) {
         const parsedKeys = JSON.parse(localKeyData);
-        // [중요 변경] fallbackKey까지 있는지 확인! 없으면 DB 다시 조회
         if (parsedKeys.newsKey && parsedKeys.geminiKey && parsedKeys.fallbackKey) {
-            console.log("✅ Loaded ALL keys (including fallback) from Local Storage");
             setUserKeys(parsedKeys);
             return parsedKeys;
-        } else {
-            console.log("⚠️ Local keys incomplete. Fetching from DB...");
         }
     }
 
@@ -114,6 +109,7 @@ export function useNewsIntel() {
 
       if (capableModels.length === 0) throw new Error("No models found.");
 
+      // 3.0 -> 2.5 -> 2.0 -> 1.5 순서
       let bestModel = capableModels.find((m: any) => m.name.includes("gemini-3.0")) || 
                       capableModels.find((m: any) => m.name.includes("gemini-2.5")) ||
                       capableModels.find((m: any) => m.name.includes("gemini-2.0")) ||
@@ -129,30 +125,42 @@ export function useNewsIntel() {
   };
 
   const callFallbackAI = async (title: string, fallbackKey: string) => {
+      // Groq 모델 (빠르고 안정적)
       const targetModel = "mixtral-8x7b-32768"; 
       
-      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-              "Authorization": `Bearer ${fallbackKey}`, 
-              "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-              messages: [{
-                  role: "user",
-                  content: `Summarize this news title in 3 sentences: "${title}"`
-              }],
-              model: targetModel
-          })
-      });
-      
-      if (!response.ok) {
-          const errData = await response.json();
-          throw new Error(`Groq Error ${response.status}: ${errData.error?.message}`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // Groq는 15초 제한
+
+      try {
+          const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                  "Authorization": `Bearer ${fallbackKey}`, 
+                  "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                  messages: [{
+                      role: "user",
+                      content: `Summarize this news title in 3 sentences: "${title}"`
+                  }],
+                  model: targetModel
+              }),
+              signal: controller.signal
+          });
+          
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+              const errData = await response.json().catch(() => ({}));
+              throw new Error(`Groq Error ${response.status}`);
+          }
+          
+          const data = await response.json();
+          return data.choices[0]?.message?.content || "Fallback returned empty.";
+      } catch (e: any) {
+          clearTimeout(timeoutId);
+          throw new Error(e.message);
       }
-      
-      const data = await response.json();
-      return data.choices[0]?.message?.content || "Fallback returned empty.";
   };
 
   const startAnalysis = async () => {
@@ -163,7 +171,6 @@ export function useNewsIntel() {
 
     try {
       let activeKeys = userKeys;
-      // [수정] 키 가져올 때 fallbackKey 확인
       if (!activeKeys?.newsKey || !activeKeys?.fallbackKey) activeKeys = await fetchKeys(user);
       if (!activeKeys?.newsKey) throw new Error("API Keys missing.");
 
@@ -197,56 +204,63 @@ export function useNewsIntel() {
         setStatusMsg(`Analyzing article ${i+1}/${articles.length}...`);
         document.title = `(${i+1}/${articles.length}) Analyzing...`;
         
-        // 1. Gemini 시도
-        for (let attempts = 0; attempts < 2 && !success; attempts++) {
-             try {
-                 const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/${foundModel}:generateContent?key=${activeKeys.geminiKey}`, {
-                     method: 'POST', 
-                     headers: {'Content-Type': 'application/json'},
-                     body: JSON.stringify({ 
-                        contents: [{ parts: [{ text: `Summarize this news title in 3 sentences: "${articles[i].title}"` }] }], 
-                        safetySettings: [
-                            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-                            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-                            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-                            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-                        ]
-                     })
-                 });
+        // 1. Gemini 시도 (10초 타임아웃)
+        try {
+             const controller = new AbortController();
+             const timeoutId = setTimeout(() => controller.abort(), 10000); // 10초 제한
 
-                 if (res.status === 200) {
-                     const data = await res.json();
-                     if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
-                         summary = data.candidates[0].content.parts[0].text;
-                         success = true;
-                     }
-                 } else {
-                     throw new Error(`Gemini Error ${res.status}`);
+             const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/${foundModel}:generateContent?key=${activeKeys.geminiKey}`, {
+                 method: 'POST', 
+                 headers: {'Content-Type': 'application/json'},
+                 body: JSON.stringify({ 
+                    contents: [{ parts: [{ text: `Summarize this news title in 3 sentences: "${articles[i].title}"` }] }], 
+                    safetySettings: [
+                        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+                    ]
+                 }),
+                 signal: controller.signal
+             });
+
+             clearTimeout(timeoutId);
+
+             if (res.status === 200) {
+                 const data = await res.json();
+                 if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+                     summary = data.candidates[0].content.parts[0].text;
+                     success = true;
                  }
-             } catch(e) { 
-                 await new Promise(r => setTimeout(r, 1500));
+             } else {
+                 console.warn(`Gemini Error ${res.status} - Switching to Fallback`);
+                 // 성공 아님 -> 자동으로 catch 블록이나 아래 if(!success)로 넘어감
              }
+        } catch(e) { 
+             console.warn("Gemini Failed/Timed out (10s), switching to Fallback...", e);
         }
 
-        // 2. Fallback
+        // 2. Gemini 실패 시 -> 즉시 Fallback (Groq) 투입
         if (!success) {
             if (activeKeys.fallbackKey) {
                 try {
-                    console.log("⚠️ Switching to Fallback AI...");
+                    // 사용자 몰래 백그라운드 전환 (로그만 찍힘)
+                    console.log("⚠️ Executing Fallback Protocol...");
                     summary = await callFallbackAI(articles[i].title, activeKeys.fallbackKey);
                     success = true;
                 } catch (fallbackError: any) {
                     console.error("Fallback Failed:", fallbackError);
-                    summary = `[System Failure] Gemini & Backup AI both failed.`;
+                    summary = `[Analysis Failed] Network or AI Error.`;
                 }
             } else {
-                summary = "Analysis Unavailable (Gemini Failed & No Backup Key in DB)";
+                summary = "[Analysis Failed] No Backup Key available.";
             }
         }
         
         setNewsList(prev => prev.map((item, idx) => idx === i ? { ...item, summary, isAnalyzing: false } : item));
         
-        const delay = Math.floor(Math.random() * (5000 - 2000 + 1) + 2000);
+        // [수정] 1초 ~ 5초 사이 랜덤 대기
+        const delay = Math.floor(Math.random() * (5000 - 1000 + 1) + 1000);
         await new Promise(r => setTimeout(r, delay));
       }
       setIsFinished(true); setStatusMsg("Analysis Complete."); document.title = "Done!";
