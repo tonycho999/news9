@@ -1,17 +1,21 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore"; // Firestore 추가
+import { getFirestore } from "firebase/firestore";
 
+// [핵심] 보내주신 news-efc4a 프로젝트 설정값으로 교체 완료
 const firebaseConfig = {
-  apiKey: "AIzaSyDdyLCiNuJ8x-iSH0OT3Jrwte_X1w97I8k",
-  authDomain: "hrproject-744f0.firebaseapp.com",
-  projectId: "hrproject-744f0",
-  storageBucket: "hrproject-744f0.firebasestorage.app",
-  messagingSenderId: "37797360783",
-  appId: "1:37797360783:web:aceb21a9bb37b336516cfa",
-  measurementId: "G-XTS13EJ5XK"
+  apiKey: "AIzaSyDG82G8sn5WgAXJz_5e2ElOC6Bw_g4WzEY",
+  authDomain: "news-efc4a.firebaseapp.com",
+  projectId: "news-efc4a",
+  storageBucket: "news-efc4a.firebasestorage.app",
+  messagingSenderId: "717438175301",
+  appId: "1:717438175301:web:32626f4b8010ee6c107b2c",
+  measurementId: "G-GPS5MG9FTF"
 };
 
+// 1. 앱 초기화
 const app = initializeApp(firebaseConfig);
+
+// 2. 인증 및 DB 도구 내보내기 (다른 파일에서 쓸 수 있도록)
 export const auth = getAuth(app);
-export const db = getFirestore(app); // db를 외부에서 쓸 수 있게 내보냄
+export const db = getFirestore(app);
